@@ -48,9 +48,9 @@ docker compose down
 <details>
 <summary><strong>Dashboard Views</strong></summary>
 
-![](else/dashboard_patient.png)
+![](else/Dashboard_patient.png)
 ![](else/Dashboard_news2_comp_tall.png)
-![](else/dashboard_ICU_all.png)
+![](else/Dashboard_ICU_all.png)
 ![](else/Dashboard_QA_tall.png)
 ![](else/prediction.png)
 ![](else/news2_dashboard_comp_2.png)
