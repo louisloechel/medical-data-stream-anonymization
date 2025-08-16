@@ -5,15 +5,15 @@ import json
 import traceback
 import os
 
-SLEEP_TIME = 0.002    # 500Hz frequency (1/500 seconds)
+# SLEEP_TIME = 0.002    # 500Hz frequency (1/500 seconds)
 # SLEEP_TIME = 0.004    # 250Hz frequency (1/250 seconds)
 # SLEEP_TIME = 0.01     # 100Hz frequency (1/100 seconds)
-# SLEEP_TIME = 0.02     # 50Hz frequency (1/50 seconds)   !!! THIS IS WHERE IT BREAKS !!!
+# SLEEP_TIME = 0.02     # 50Hz frequency (1/50 seconds)   !!! THIS IS WHERE THE PREDICTION MODEL IMPACTS LATENCY !!!
 # SLEEP_TIME = 0.05     # 20Hz frequency (1/20 seconds)
 # SLEEP_TIME = 0.1      # 10Hz frequency (1/10 seconds)
 # SLEEP_TIME = 0.2      # 5Hz frequency (1/5 seconds)
 # SLEEP_TIME = 0.5      # 2Hz frequency (1/2 seconds)
-# SLEEP_TIME = 1        # 1Hz frequency (1 second)  
+SLEEP_TIME = 1        # 1Hz frequency (1 second)  
 # Adjust SLEEP_TIME as needed for your use case
 
 def main():
