@@ -15,7 +15,7 @@ PREDICTED_PULSE_GAUGE = Gauge('kafka_consumer_predicted_pulse', 'Predicted next 
 PREDICTED_BPS_GAUGE = Gauge('kafka_consumer_predicted_bps', 'Predicted next BPS', ['userid', 'topic', 'icd10'])
 PREDICTED_SHOCK_GAUGE = Gauge('kafka_consumer_predicted_shock', 'Predicted next shock index', ['userid', 'topic', 'icd10'])
 SHOCK_GAUGE = Gauge('kafka_consumer_shock', 'Shock index', ['userid', 'topic', 'icd10'])
-ICD10_LAST_SEEN = Gauge('kafka_consumer_icd10_last_seen', 'Latest icd10 code seen per userid and topic', ['userid', 'topic', 'icd10'])
+ICD10_LAST_SEEN = Gauge('kafka_consumer_icd10_last_seen', 'Unix timestamp when icd10 was last seen for a userid and topic', ['userid', 'topic', 'icd10'])
 PROCESSING_LATENCY = Gauge('kafka_consumer_processing_latency', 'Processing latency in seconds', ['userid', 'topic'])
 
 # Define Kafka consumer configuration
@@ -86,10 +86,14 @@ def train_and_predict(message, topic):
 
     # Parse the message
     try:
-        pulse = message['pulse']
-        bps = message['bps']
-        userid = message['userid']
-        icd10 = message['icd10']
+        try:
+            userid = message['userid']
+            icd10 = message['icd10']
+            pulse = message['pulse']
+            bps = message['bps']
+        except KeyError as e:
+            print(f"Missing key in message: {e}", flush=True)
+            return
 
         # Determine the correct histories based on the topic
         if topic == 'prink-topic':
@@ -163,8 +167,11 @@ def process_value(value):
 
 def handle_message(message, topic, time_now):
     try:
-        userid = message['userid']
-        icd10 = message['icd10']
+        userid = message.get('userid')
+        if userid is None:
+            print("Skipping message without 'userid'", flush=True)
+            return
+        icd10 = message.get('icd10', 'unknown')
         timestamp_str = message.get('timestamp')
         if timestamp_str:
             timestamp_dt = datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S.%fZ")
@@ -173,7 +180,7 @@ def handle_message(message, topic, time_now):
             PROCESSING_LATENCY.labels(userid=userid, topic=topic).set(delta)
             # print(f"Processing latency for {userid} on topic {topic}: {delta:.2f} seconds", flush=True)
 
-        ICD10_LAST_SEEN.labels(userid=userid, topic=topic, icd10=icd10).set(1)
+        ICD10_LAST_SEEN.labels(userid=userid, topic=topic, icd10=icd10).set(time_now)
 
         for key, value in message.items():
             if key not in gauges:
@@ -184,28 +191,33 @@ def handle_message(message, topic, time_now):
                     value = processed_value
             try:
                 value = float(value)
-            except ValueError:
+            except (TypeError, ValueError):
                 continue
             gauges[key].labels(userid=userid, topic=topic, icd10=icd10).set(value)
 
         if 'correct_bed_registration' not in gauges:
             gauges['correct_bed_registration'] = Gauge('kafka_consumer_correct_bed_registration', 'Kafka consumer correct bed registration', ['userid', 'topic'])
 
-        username = message['username']
-        uid = str(message['userid'])
+        username = message.get('username', 'Unknown')
+        uid = str(userid)
         if username != "Unknown" and len(uid) == 7 and uid.startswith("03"):
             gauges['correct_bed_registration'].labels(userid=userid, topic=topic).set(1)
         else:
             gauges['correct_bed_registration'].labels(userid=userid, topic=topic).set(0)
 
         if 'pulse' in message and 'bps' in message:
-            pulse = message['pulse']
-            bps = message['bps']
+            pulse = message.get('pulse')
+            bps = message.get('bps')
             if topic == 'prink-topic':
                 pulse = process_value(pulse)
                 bps = process_value(bps)
-            shock_index = int(pulse) / int(bps) if int(bps) != 0 else 0
-            SHOCK_GAUGE.labels(userid=userid, topic=topic, icd10=icd10).set(shock_index)
+            try:
+                p = float(pulse)
+                b = float(bps)
+                shock_index = (p / b) if b != 0 else 0.0
+                SHOCK_GAUGE.labels(userid=userid, topic=topic, icd10=icd10).set(shock_index)
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
 
         """
         Uncomment the following line to enable pulse prediction
@@ -244,7 +256,11 @@ def consume_messages():
                     time_now = time.time()
                     msg_content = msg.value()
                     # print(f"Received message: {msg_content}")
-                    message = json.loads(msg_content.decode('utf-8'))
+                    try:
+                        message = json.loads(msg_content.decode('utf-8'))
+                    except Exception as e:
+                        print(f"Skipping invalid JSON payload: {e}", flush=True)
+                        continue
 
                     executor.submit(handle_message, message, msg.topic(), time_now)
 
@@ -268,3 +284,6 @@ if __name__ == "__main__":
         except RuntimeError as e:
             print(f"RuntimeError: {e}", flush=True)
             time.sleep(5)  # Wait before retrying
+        except Exception as e:
+            print(f"Unhandled exception in main loop: {e}", flush=True)
+            time.sleep(5)
