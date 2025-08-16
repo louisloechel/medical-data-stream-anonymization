@@ -4,3 +4,4 @@ grafana/grafana.db
 .DS_Store
 *.xml
 grafana/plugins/*
+/.vscode
