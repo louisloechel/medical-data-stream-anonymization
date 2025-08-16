@@ -80,7 +80,7 @@ docker compose down
 - `key.deserializer`: Deserializer for the message key.
 - `value.deserializer`: Deserializer for the message value.
 
-➡️ The consumer properties (connecting Prink to other topics) can be configured in the [Prink Job](og-prink/src/main/java/ganges/GangesEvaluation.java) file.
+> **Note:** The consumer properties (connecting Prink to other topics) can be configured in the [GangesEvaluation.java Prink Job](og-prink/src/main/java/ganges/GangesEvaluation.java) file.
 
 #### Flink Configuration
 - The Flink configuration file is located at `flink-conf.yaml`.
