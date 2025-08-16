@@ -48,6 +48,7 @@ services:
         condition: service_healthy
     networks:
       - kafka-network
+    restart: unless-stopped
     ports:
       - "8000:8000"  # Prometheus scraping
 
@@ -122,6 +123,7 @@ services:
         reservations:
           cpus: '2'
           memory: 4G
+    restart: unless-stopped
     networks:
       - kafka-network
 
