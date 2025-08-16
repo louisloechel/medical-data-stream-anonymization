@@ -45,10 +45,10 @@ public class GangesEvaluation {
 
     int k = 5;
     int l = 3;
-    int delta = 20;
-    int beta = 50;
-    int zeta = 10;
-    int mu = 10;
+    int delta = 125;
+    int beta = 50000;
+    int zeta = 10000;
+    int mu = 100;
 
     private final static Logger LOG = LoggerFactory.getLogger(GangesEvaluation.class);
 
