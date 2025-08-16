@@ -72,7 +72,7 @@ docker compose down
 | `zeta`    | 10000         |
 | `mu`      | 100           |
 
-> **Note:** The consumer properties (connecting Prink to other topics) can be configured in the [GangesEvaluation.java Prink Job](og-prink/src/main/java/ganges/GangesEvaluation.java) file.
+> **Note:** The privacy parameters can be configured in the [GangesEvaluation.java Prink Job](og-prink/src/main/java/ganges/GangesEvaluation.java) file.
 
 #### Prink Kafka consumer properties
 - `bootstrap.servers`: Kafka broker addresses.
