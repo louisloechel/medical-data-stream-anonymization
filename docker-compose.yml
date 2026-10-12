@@ -35,6 +35,18 @@ services:
   load-generator:
     build:
       context: ./load-generator
+    environment:
+      INPUT_DIR: ${INPUT_DIR:-output_json_files}
+      RATE_HZ: ${RATE_HZ:-1}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:29092}
+      REPLAY_MODE: ${REPLAY_MODE:-fixed-rate}
+      SPEEDUP: ${SPEEDUP:-1}
+      LOOP: ${LOOP:-1}
+    # Real data is never part of the image (see load-generator/.dockerignore).
+    # To replay locally converted data, mount it read-only and set e.g.
+    # INPUT_DIR=output_dwc REPLAY_MODE=original-timing SPEEDUP=60:
+    # volumes:
+    #   - ./load-generator/output_dwc:/app/output_dwc:ro
     depends_on:
       kafka:
         condition: service_healthy
