@@ -68,11 +68,7 @@ public class NonNumericalGeneralizer implements BaseGeneralizer{
     public Tuple2<String, Float> generalize(List<Tuple> withTuples) {
         // Add withTuples temporary to the tree
         for(Tuple input: withTuples){
-            if(input.getField(position).getClass().isArray()){
-                tree.addByArray(input.getField(position), true);
-            }else{
-                tree.addByName(input.getField(position), true);
-            }
+            addToTree(input, true);
         }
         // Calculate generalization
         Tuple2<String, Float> output = tree.getGeneralization(true);
@@ -91,10 +87,22 @@ public class NonNumericalGeneralizer implements BaseGeneralizer{
     @Override
     public void addTuple(Tuple newTuple) {
         // Update the tree by adding new values to tree
-        if(newTuple.getField(position).getClass().isArray()){
-            tree.addByArray(newTuple.getField(position), false);
+        addToTree(newTuple, false);
+    }
+
+    /**
+     * Adds the attribute value of the tuple to the tree. Missing values (<code>null</code>) are represented by
+     * the {@link Cluster#MISSING_VALUE} node directly below the root, so a cluster that mixes missing and
+     * present values is generalized to the root instead of pretending that a value was present.
+     */
+    private void addToTree(Tuple input, boolean isTemporary) {
+        Object value = input.getField(position);
+        if(value == null){
+            tree.addByName(Cluster.MISSING_VALUE, isTemporary);
+        }else if(value.getClass().isArray()){
+            tree.addByArray((String[]) value, isTemporary);
         }else{
-            tree.addByName(newTuple.getField(position), false);
+            tree.addByName(value.toString(), isTemporary);
         }
     }
 

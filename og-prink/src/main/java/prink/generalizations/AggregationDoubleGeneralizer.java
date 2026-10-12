@@ -37,6 +37,8 @@ public class AggregationDoubleGeneralizer implements BaseGeneralizer{
      */
     @Override
     public Tuple2<Tuple2<Double, Double>, Float> generalize() {
+        // All values inside the cluster are missing (null): nothing to aggregate
+        if(aggregationRange == null) return Tuple2.of(null, 0.0f);
         return Tuple2.of(aggregationRange, infoLoss(aggregationRange.f0, aggregationRange.f1));
     }
 
@@ -47,13 +49,17 @@ public class AggregationDoubleGeneralizer implements BaseGeneralizer{
      */
     @Override
     public Tuple2<Tuple2<Double, Double>, Float> generalize(List<Tuple> withTuples) {
-        Double min = aggregationRange.f0;
-        Double max = aggregationRange.f1;
+        Double min = (aggregationRange == null) ? null : aggregationRange.f0;
+        Double max = (aggregationRange == null) ? null : aggregationRange.f1;
 
         for(Tuple input: withTuples){
-            min = Math.min(input.getField(position), min);
-            max = Math.max(input.getField(position), max);
+            Double value = input.getField(position);
+            // Missing values (null) do not change the aggregation range
+            if(value == null) continue;
+            min = (min == null) ? value : Math.min(value, min);
+            max = (max == null) ? value : Math.max(value, max);
         }
+        if(min == null) return Tuple2.of(null, 0.0f);
         Tuple2<Double, Double> borders = Tuple2.of(min, max);
         return Tuple2.of(borders, infoLoss(min, max));
     }
@@ -78,6 +84,8 @@ public class AggregationDoubleGeneralizer implements BaseGeneralizer{
     public void addTuple(Tuple newTuple) {
         // Get the new attribute value of the newTuple
         Double inputValue = newTuple.getField(position);
+        // Missing values (null) do not change the aggregation range
+        if(inputValue == null) return;
 
         // Initialize aggregation range if newTuple is the first tuple inside the cluster
         if(aggregationRange == null){
@@ -103,15 +111,24 @@ public class AggregationDoubleGeneralizer implements BaseGeneralizer{
     @Override
     public void removeTuple(Tuple removedTuple) {
         Double inputValue = removedTuple.getField(position);
+        // Missing values (null) never defined the aggregation range
+        if(inputValue == null || aggregationRange == null) return;
 
         // If the removed tuple was part of the aggregation borders, recalculate the aggregation range
         if(inputValue.equals(aggregationRange.f0) || inputValue.equals(aggregationRange.f1)){
-            Double min = Double.MAX_VALUE;
-            Double max = Double.MIN_VALUE;
+            Double min = null;
+            Double max = null;
 
             for(Tuple clusterEntry: owningCluster.getAllEntries()){
-                min = Math.min(clusterEntry.getField(position), min);
-                max = Math.max(clusterEntry.getField(position), max);
+                Double value = clusterEntry.getField(position);
+                if(value == null) continue;
+                min = (min == null) ? value : Math.min(value, min);
+                max = (max == null) ? value : Math.max(value, max);
+            }
+            if(min == null){
+                // Only missing values left inside the cluster
+                aggregationRange = null;
+                return;
             }
             aggregationRange.f0 = min;
             aggregationRange.f1 = max;

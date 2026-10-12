@@ -192,7 +192,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
 
     @Override
     public void processElement(INPUT tuple, ReadOnlyContext context, Collector<OUTPUT> output) {
-        LOG.debug("Element received: key: {}", tuple.getField(posTupleId).toString());
+        LOG.debug("Element received: key: {}", (Object) tuple.getField(posTupleId));
 
         TimerService ts = context.timerService();
 
@@ -342,7 +342,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
             for(Tuple tuple: allBigGammaEntries){
                 int pos = posSensibleAttributes[0];
                 // Check for arrays
-                Object sensAttributeValue = tuple.getField(pos).getClass().isArray() ? ((Object[]) tuple.getField(pos))[((Object[]) tuple.getField(pos)).length-1] : tuple.getField(pos);
+                Object sensAttributeValue = Cluster.comparableValue(tuple, pos);
                 output.add(sensAttributeValue);
                 if(output.size() >= l) return true;
             }
@@ -356,7 +356,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
                 if(counter >= l) return true;
                 for (int pos : posSensibleAttributes) {
                     //noinspection ComparatorCombinators - This is apparently slightly more performant then 'Comparator.comparingLong(Map.Entry::getValue)'
-                    Map.Entry<Object, Long> temp = allBigGammaEntries.stream().collect(Collectors.groupingBy(s -> (s.getField(pos).getClass().isArray() ? ((Object[]) s.getField(pos))[((Object[]) s.getField(pos)).length-1] : s.getField(pos)), Collectors.counting()))
+                    Map.Entry<Object, Long> temp = allBigGammaEntries.stream().collect(Collectors.groupingBy(s -> Cluster.comparableValue(s, pos), Collectors.counting()))
                         .entrySet().stream().max((attEntry1, attEntry2) -> Long.compare(attEntry1.getValue(), attEntry2.getValue())).orElse(null);
                     numOfAppearances.add(Tuple2.of(pos, temp));
                 }
@@ -366,7 +366,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
                 ArrayList<Tuple> tuplesToDelete = new ArrayList<>(); // TODO-Later maybe use iterator to delete tuples if performance is better
                 for(Tuple tuple: allBigGammaEntries){
                     // adjust to find also values from arrays
-                    Object toCompare = (tuple.getField(mapEntryToDelete.f0).getClass().isArray() ? ((Object[]) tuple.getField(mapEntryToDelete.f0))[((Object[]) tuple.getField(mapEntryToDelete.f0)).length-1] : tuple.getField(mapEntryToDelete.f0));
+                    Object toCompare = Cluster.comparableValue(tuple, mapEntryToDelete.f0);
                     if(toCompare.equals(mapEntryToDelete.f1.getKey())){
                         tuplesToDelete.add(tuple);
                     }
@@ -757,7 +757,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
             while (oneIdTuples.size() > 0) {
                 for (int pos: posSensibleAttributes) {
                     //noinspection ComparatorCombinators - This is apparently slightly more performant then 'Comparator.comparingLong(Map.Entry::getValue)'
-                    Map.Entry<Object, Long> temp = oneIdTuples.stream().collect(Collectors.groupingBy(s -> (s.getField(pos).getClass().isArray() ? ((Object[]) s.getField(pos))[((Object[]) s.getField(pos)).length-1] : s.getField(pos)), Collectors.counting()))
+                    Map.Entry<Object, Long> temp = oneIdTuples.stream().collect(Collectors.groupingBy(s -> Cluster.comparableValue(s, pos), Collectors.counting()))
                             .entrySet().stream().max((attEntry1, attEntry2) -> Long.compare(attEntry1.getValue(), attEntry2.getValue())).orElse(null);
                     numOfAppearances.add(Tuple2.of(pos, temp));
                 }
@@ -769,7 +769,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
                 output.putIfAbsent(generatedKey, new ArrayList<>());
                 for(Tuple tuple: oneIdTuples){
                     // Adjust to find also values from arrays TODO re-write
-                    Object toCompare = (tuple.getField(mapEntryToDelete.f0).getClass().isArray() ? ((Object[]) tuple.getField(mapEntryToDelete.f0))[((Object[]) tuple.getField(mapEntryToDelete.f0)).length-1] : tuple.getField(mapEntryToDelete.f0));
+                    Object toCompare = Cluster.comparableValue(tuple, mapEntryToDelete.f0);
                     if(toCompare.equals(mapEntryToDelete.f1.getKey())){
                         output.get(generatedKey).add(tuple);
                         tuplesToDelete.add(tuple);
