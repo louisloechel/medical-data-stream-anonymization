@@ -24,9 +24,12 @@
     # stored in {{ data_dir }}/secrets that mounts {{ data_dir }}/input.
     compose_extra_files: []
     # "auto": tear the stack down and start it fresh whenever the checked-out
-    # commit changes (avoids duplicate Flink jobs). "always" / "never" force it.
+    # commit or the compose override changes (avoids duplicate Flink jobs and
+    # stale Kafka broker registrations). "always" / "never" force it.
     compose_clean_restart: auto
-    # Wait until this many Flink jobs are RUNNING (0 disables the check).
+    # Force a rebuild of the images (and a clean restart) without a new commit.
+    compose_rebuild: false
+    # Wait until exactly this many Flink jobs are RUNNING (0 disables the check).
     flink_expected_running_jobs: 2
     flink_wait_retries: 60
     flink_wait_delay: 10
@@ -36,6 +39,10 @@
     grafana_state_dir: /var/lib/stream-anon/grafana
     grafana_reset: false
     grafana_uid: 472
+    # Publish all container ports on 127.0.0.1 only (reach them via SSH
+    # tunnels). docker-compose.yml publishes on 0.0.0.0, and Docker bypasses
+    # host firewalls such as ufw. Requires Docker Compose >= 2.24.4.
+    bind_ports_to_localhost: true
     # Ansible-managed compose override (not part of the repository).
     compose_deploy_override: /etc/stream-anon/docker-compose.deploy.yml
     compose_files: >-
@@ -45,9 +52,9 @@
     - name: Check that the target is a supported Ubuntu release
       ansible.builtin.assert:
         that:
-          - ansible_distribution == "Ubuntu"
-          - ansible_distribution_version is version('22.04', '>=')
-        fail_msg: "Only Ubuntu 22.04 / 24.04 are supported (found {{ ansible_distribution }} {{ ansible_distribution_version }})."
+          - ansible_facts['distribution'] == "Ubuntu"
+          - ansible_facts['distribution_version'] is version('22.04', '>=')
+        fail_msg: "Only Ubuntu 22.04 / 24.04 are supported (found {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }})."
 
   tasks:
     # ------------------------------------------------------------------ Docker
@@ -84,9 +91,9 @@
             name: docker
             types: deb
             uris: https://download.docker.com/linux/ubuntu
-            suites: "{{ ansible_distribution_release }}"
+            suites: "{{ ansible_facts['distribution_release'] }}"
             components: stable
-            architectures: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+            architectures: "{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'amd64' }}"
             signed_by: /etc/apt/keyrings/docker.asc
             state: present
 
@@ -175,35 +182,51 @@
         state: directory
         mode: "0755"
 
-    - name: Write deployment compose override
-      ansible.builtin.copy:
+    - name: Read the repository's compose file
+      ansible.builtin.slurp:
+        src: "{{ app_dir }}/docker-compose.yml"
+      register: compose_file_raw
+
+    - name: Write deployment compose override (Grafana state, localhost-only ports)
+      ansible.builtin.template:
+        src: docker-compose.deploy.yml.j2
         dest: "{{ compose_deploy_override }}"
         mode: "0644"
-        content: |
-          # Managed by Ansible (deploy/ansible/deploy.yml) - do not edit.
-          services:
-            grafana:
-              volumes:
-                - {{ grafana_state_dir }}:/var/lib/grafana
+      vars:
+        compose_definition: "{{ compose_file_raw.content | b64decode | from_yaml }}"
+      register: compose_override
 
     # ---------------------------------------------------------------- Compose
+    # Recreating only some containers breaks the stack: a recreated Kafka gets a
+    # new broker id while ZooKeeper still holds the old registration, and the
+    # one-shot job submitters (flink-job, og-prink-job) submit their Flink jobs
+    # again next to the still running old ones. Therefore:
+    #  - images are rebuilt (--build) only when the checkout changed (or on
+    #    request), because `up --build` recreates all built services;
+    #  - before a rebuild or a compose config change the stack is taken down.
+    - name: Decide whether to rebuild and restart the stack
+      ansible.builtin.set_fact:
+        stack_rebuild: "{{ app_checkout.changed or (compose_rebuild | bool) }}"
+        stack_restart: >-
+          {{ compose_clean_restart == 'always' or
+             (compose_clean_restart == 'auto' and app_checkout.before is not none and
+              (app_checkout.changed or compose_override.changed or (compose_rebuild | bool))) }}
+
     - name: Stop the running stack before switching versions
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         files: "{{ compose_files }}"
         state: absent
         remove_orphans: true
-      when: >-
-        compose_clean_restart == 'always' or
-        (compose_clean_restart == 'auto' and app_checkout.before is not none
-         and app_checkout.before != app_checkout.after)
+      when: stack_restart | bool
 
-    - name: Build and start the stack (docker compose up -d --build)
+    - name: Build and start the stack (docker compose up -d [--build])
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         files: "{{ compose_files }}"
         state: present
-        build: always
+        # "policy" still builds images that do not exist yet.
+        build: "{{ 'always' if stack_rebuild | bool else 'policy' }}"
         pull: missing
         remove_orphans: true
       register: compose_up
@@ -217,7 +240,7 @@
       until: >-
         flink_jobs.status == 200 and
         (flink_jobs.json.jobs | selectattr('state', 'equalto', 'RUNNING') | list | length)
-        >= (flink_expected_running_jobs | int)
+        == (flink_expected_running_jobs | int)
       retries: "{{ flink_wait_retries }}"
       delay: "{{ flink_wait_delay }}"
       when: (flink_expected_running_jobs | int) > 0
