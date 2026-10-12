@@ -81,6 +81,33 @@ class KafkaFlinkJobTest {
     }
 
     @Test
+    void unknownFieldsArePassedThroughUnchanged() throws Exception {
+        JsonNode out = process("{\"recordid\":7,\"userid\":\"u\",\"ageBand\":\"60-69\",\"sex\":null,"
+                + "\"postcode2\":\"10\",\"rhythm\":\"Sinus-Rhythmus\",\"ectopyCount\":3,\"o2\":true,"
+                + "\"nested\":{\"a\":[1,2]},\"pulse\":80}");
+        assertEquals("7", out.get("recordid").asText());
+        assertTrue(out.get("recordid").isTextual(), "recordid is normalized to a string");
+        assertEquals("60-69", out.get("ageBand").asText());
+        assertTrue(out.has("sex") && out.get("sex").isNull(), "explicit null is kept");
+        assertEquals("10", out.get("postcode2").asText());
+        assertTrue(out.get("postcode2").isTextual(), "string stays a string");
+        assertEquals("Sinus-Rhythmus", out.get("rhythm").asText());
+        assertEquals(3, out.get("ectopyCount").asInt());
+        assertTrue(out.get("o2").isBoolean());
+        assertEquals("{\"a\":[1,2]}", out.get("nested").toString());
+        assertEquals(0, out.get("pulseNEWS").asInt());
+        // fields that are not in the input and not part of the minimum schema are not invented
+        assertFalse(out.has("rass"));
+    }
+
+    @Test
+    void computedFieldsOverwriteInputFields() throws Exception {
+        JsonNode out = process("{\"userid\":\"u\",\"pulse\":131,\"pulseNEWS\":0,\"news2Partial\":99}");
+        assertEquals(3, out.get("pulseNEWS").asInt());
+        assertEquals(3, out.get("news2Partial").asInt());
+    }
+
+    @Test
     void numericStringsAreAccepted() throws Exception {
         JsonNode out = process("{\"userid\":\"u\",\"pulse\":\"131\"}");
         assertEquals(3, out.get("pulseNEWS").asInt());

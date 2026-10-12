@@ -63,16 +63,29 @@ public class KafkaFlinkJob {
         env.execute("Kafka Flink Job");
     }
 
-    /** Fields copied unchanged from raw-topic to processed-topic (if present). */
-    private static final String[] PASS_THROUGH = {
-            "userid", "caseid", "username", "userinitials", "ward"
+    /**
+     * Fields that are always present in a processed-topic record (JSON null if
+     * the raw record lacks them), so downstream consumers and Prink profiles
+     * see a stable minimum schema. All other input fields are passed through
+     * only if present.
+     */
+    private static final String[] ALWAYS_PRESENT = {
+            "recordid", "userid", "caseid", "username", "userinitials", "ward",
+            "resp", "bps", "pulse", "spo2", "temp", "icd10", "timestamp"
     };
 
     /**
      * Parses one raw-topic record and returns the processed-topic record, or
      * null if the record cannot be used (invalid JSON or no userid).
-     * Missing or null vital signs yield a null sub-score; news2Partial is the
-     * sum of the available sub-scores and news2Components their number.
+     *
+     * <p>The output is a pass-through of the input object: every input field
+     * is copied unchanged (so new optional fields reach processed-topic
+     * without code changes), then the computed NEWS2 fields are added,
+     * overwriting input fields of the same name. {@code recordid} is
+     * normalized to a string.
+     *
+     * <p>Missing or null vital signs yield a null sub-score; news2Partial is
+     * the sum of the available sub-scores and news2Components their number.
      */
     static String process(ObjectMapper objectMapper, String value) {
         JsonNode in;
@@ -93,43 +106,29 @@ public class KafkaFlinkJob {
         Integer spo2Score = News2.spo2Score(numeric(in, "spo2"));
         Integer tempScore = News2.tempScore(numeric(in, "temp"));
 
-        ObjectNode out = objectMapper.createObjectNode();
-        out.put("recordid", hasValue(in, "recordid") ? in.get("recordid").asText() : null);
-        for (String field : PASS_THROUGH) {
-            copy(in, out, field);
+        // pass-through: copy all input fields (in input order)
+        ObjectNode out = ((ObjectNode) in).deepCopy();
+        for (String field : ALWAYS_PRESENT) {
+            if (!out.has(field)) {
+                out.putNull(field);
+            }
         }
-        copy(in, out, "resp");
+        out.put("recordid", hasValue(in, "recordid") ? in.get("recordid").asText() : null);
+
+        // computed fields (overwrite input fields of the same name)
         out.put("respNEWS", respScore);
-        copy(in, out, "bps");
         out.put("bpsNEWS", bpsScore);
-        copy(in, out, "pulse");
         out.put("pulseNEWS", pulseScore);
-        copy(in, out, "spo2");
         out.put("spo2NEWS", spo2Score);
-        copy(in, out, "temp");
         out.put("tempNEWS", tempScore);
         out.put("news2Partial", News2.partialSum(respScore, bpsScore, pulseScore, spo2Score, tempScore));
         out.put("news2Components", News2.components(respScore, bpsScore, pulseScore, spo2Score, tempScore));
-        copy(in, out, "icd10");
-        if (in.has("measured_at")) {
-            copy(in, out, "measured_at");
-        }
-        copy(in, out, "timestamp");
         return out.toString();
     }
 
     private static boolean hasValue(JsonNode node, String field) {
         JsonNode v = node.get(field);
         return v != null && !v.isNull();
-    }
-
-    private static void copy(JsonNode in, ObjectNode out, String field) {
-        JsonNode v = in.get(field);
-        if (v == null) {
-            out.putNull(field);
-        } else {
-            out.set(field, v);
-        }
     }
 
     /** Numeric value of a field (number or numeric string), or null. */
