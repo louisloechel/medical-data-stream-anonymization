@@ -5,3 +5,19 @@ grafana/grafana.db
 *.xml
 grafana/plugins/*
 /.vscode
+
+# --- Real / sensitive data: never commit ---
+# Real data exports (e.g. DWC numerics) are placed here locally only
+load-generator/input/*
+!load-generator/input/.gitkeep
+# Converter output derived from real data
+load-generator/output_dwc/*
+!load-generator/output_dwc/.gitkeep
+# Credentials
+secrets/*
+!secrets/.gitkeep
+.env
+# Private scripts and notes
+private/
+# Compressed data exports
+*.csv.zip

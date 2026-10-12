@@ -88,6 +88,39 @@ docker compose down
   - `jobmanager.rpc.address`: Address of the job manager.
   - `taskmanager.numberOfTaskSlots`: Number of task slots per task manager.
 
+#### Real monitor data (local only)
+Real data must never be committed. Place exports in `load-generator/input/`
+(ignored by git and by the Docker build) and convert them into per-patient
+JSON files in `load-generator/output_dwc/` (also ignored):
+
+```bash
+cd load-generator
+python3 convert_dwc.py --input input/<export>.csv.zip --output-dir output_dwc \
+    --bucket-seconds 1 --ffill-seconds 0
+```
+
+`convert_dwc.py` maps Philips DWC numerics (`c_label`/`c_sub_label`) to
+`resp`, `bps` (systolic only), `pulse`, `spo2` and `temp`, merges them into one
+record per patient and time bucket, and prints aggregate statistics only. See
+the module docstring for the mapping, filters and forward-fill options.
+
+#### Load generator
+`load-generator/producer.py` is configured via environment variables (also
+settable in `docker-compose.yml` / `.env`):
+
+| Variable          | Default             | Meaning                                                        |
+|-------------------|---------------------|----------------------------------------------------------------|
+| `INPUT_DIR`       | `output_json_files` | folder with one JSON file per patient                          |
+| `RATE_HZ`         | `1`                 | `fixed-rate`: records per patient per second                   |
+| `KAFKA_BOOTSTRAP` | `kafka:29092`       | Kafka bootstrap servers                                        |
+| `REPLAY_MODE`     | `fixed-rate`        | `fixed-rate` or `original-timing` (uses `measured_at`)         |
+| `SPEEDUP`         | `1`                 | `original-timing`: time acceleration factor                    |
+| `LOOP`            | `1`                 | `0`: stop after the last record instead of starting over       |
+| `LOG_MESSAGES`    | `0`                 | `1`: log every sent record                                     |
+
+In `fixed-rate` mode every patient cycles through its own file independently,
+so patient files may have different lengths.
+
 ## Third-Party Licenses
 This project uses third-party components:
 - Apache Kafka, Zookeeper, Flink, Prometheus (Apache 2.0)

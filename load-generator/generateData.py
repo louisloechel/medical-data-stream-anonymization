@@ -114,6 +114,7 @@ def generate_synthetic_data_for_user(user, num_timestamps=100, interval_minutes=
             "resp": generate_respiratory_rate(),
             "bps": generate_blood_pressure_systolic(),
             "pulse": generate_pulse(),
+            "spo2": generate_oxygen_saturation(),
             "temp": generate_body_temperature(),
             "userinitials": user["userinitials"],
             "username": user["username"],           # firstname lastname

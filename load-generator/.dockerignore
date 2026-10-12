@@ -1,0 +1,7 @@
+# Never bake real data (or data derived from it) into the image.
+# Mount it at runtime instead, e.g. -v ./load-generator/output_dwc:/app/output_dwc:ro
+input/
+output_dwc/
+*.csv
+*.csv.zip
+.env
