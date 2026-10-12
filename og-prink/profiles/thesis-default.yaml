@@ -1,0 +1,55 @@
+# Anonymization profile: thesis-default
+#
+# Reproduces the original hard-coded setup of GangesEvaluation (used when no profile is given),
+# with two fixes applied:
+#   - the data subject key is the patient number (userid), so k counts distinct patients
+#   - temp is a double (37.3 stays 37.3) and is aggregated as a double
+#
+# All vitals, their NEWS2 sub-scores and the ICD-10 code are generalized AND sensitive (used for l-diversity).
+# Direct identifiers (recordid, userid, username, timestamp) are passed through unchanged.
+#
+# NOTE on the [0, 3] bounds of the vitals: they were taken over from the original code. Prink widens the
+# domain of an aggregation generalizer automatically when it sees values outside the bounds, so the
+# effective domain becomes the observed min/max. Use physiological bounds (see vitals-sensitive.yaml)
+# for a stable information-loss normalization.
+
+name: thesis-default
+description: Original thesis setup (k=5, l=3, delta=125), keyed on the patient
+
+privacy:
+  k: 5
+  l: 3
+  delta: 125
+  beta: 50000
+  zeta: 10000
+  mu: 100
+  suppressStrategy: 2
+  showInfoLoss: true
+
+kafka:
+  bootstrapServers: kafka:29092
+  inputTopic: processed-topic
+  outputTopic: prink-topic
+  groupId: flink-group
+
+dataSubjectKey: userid
+
+fields:
+  - { name: recordid,  type: string, role: identifier-passthrough }
+  - { name: userid,    type: string, role: identifier-passthrough }   # patient number (keep as string: leading zeros)
+  - { name: username,  type: string, role: identifier-passthrough }
+  - { name: resp,      type: int,    role: sensitive, generalizer: aggregation, bounds: [0, 3] }
+  - { name: respNEWS,  type: int,    role: sensitive, generalizer: aggregation, bounds: [0, 3] }
+  - { name: bps,       type: int,    role: sensitive, generalizer: aggregation, bounds: [0, 3] }
+  - { name: bpsNEWS,   type: int,    role: sensitive, generalizer: aggregation, bounds: [0, 3] }
+  - { name: pulse,     type: int,    role: sensitive, generalizer: aggregation, bounds: [0, 3] }
+  - { name: pulseNEWS, type: int,    role: sensitive, generalizer: aggregation, bounds: [0, 3] }
+  - { name: temp,      type: double, role: sensitive, generalizer: aggregation, bounds: [30.0, 45.0] }
+  - { name: tempNEWS,  type: int,    role: sensitive, generalizer: aggregation, bounds: [0, 3] }
+  - name: icd10
+    type: string
+    role: sensitive
+    generalizer: hierarchy
+    hierarchy:
+      file: hierarchies/icd10_chapter1.yaml   # bundled resource (src/main/resources)
+  - { name: timestamp, type: string, role: identifier-passthrough }

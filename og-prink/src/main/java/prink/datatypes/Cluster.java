@@ -36,6 +36,28 @@ public class Cluster {
 
     List<Map<Object, Double>> infoLossValuesRequests = new ArrayList<>();
 
+    /** Placeholder used for missing (<code>null</code>) attribute values when values are compared or counted */
+    public static final String MISSING_VALUE = "<MISSING>";
+
+    /**
+     * Returns the value of an attribute as used for comparisons and diversity calculations:
+     * for array values (hierarchy paths) the most specific (last) entry, and {@link #MISSING_VALUE}
+     * for missing (<code>null</code>) values, so that missing values form their own group instead of
+     * causing a NullPointerException.
+     * @param tuple data tuple
+     * @param pos attribute position
+     * @return comparable attribute value (never <code>null</code>)
+     */
+    public static Object comparableValue(Tuple tuple, int pos) {
+        Object value = tuple.getField(pos);
+        if(value == null) return MISSING_VALUE;
+        if(value.getClass().isArray()){
+            Object[] array = (Object[]) value;
+            return (array.length == 0 || array[array.length-1] == null) ? MISSING_VALUE : array[array.length-1];
+        }
+        return value;
+    }
+
     /**
      * Constructor of the Cluster class
      * @param rules Array of CastleRules to follow
@@ -362,7 +384,7 @@ public class Cluster {
             for(Tuple tuple: entries){
                 int pos = posSensibleAttributes[0];
                 // Check for arrays
-                Object sensAttributeValue = tuple.getField(pos).getClass().isArray() ? ((Object[]) tuple.getField(pos))[((Object[]) tuple.getField(pos)).length-1] : tuple.getField(pos);
+                Object sensAttributeValue = comparableValue(tuple, pos);
                 output.add(sensAttributeValue);
             }
             return output.size();
@@ -377,7 +399,7 @@ public class Cluster {
                 counter++;
                 for (int pos : posSensibleAttributes) {
                     //noinspection ComparatorCombinators - This is apparently slightly more performant then 'Comparator.comparingLong(Map.Entry::getValue)'
-                    Map.Entry<Object, Long> temp = entriesCopy.stream().collect(Collectors.groupingBy(s -> (s.getField(pos).getClass().isArray() ? ((Object[]) s.getField(pos))[((Object[]) s.getField(pos)).length-1] : s.getField(pos)), Collectors.counting()))
+                    Map.Entry<Object, Long> temp = entriesCopy.stream().collect(Collectors.groupingBy(s -> comparableValue(s, pos), Collectors.counting()))
                         .entrySet().stream().max((attEntry1, attEntry2) -> Long.compare(attEntry1.getValue(), attEntry2.getValue())).orElse(null);
                     numOfAppearances.add(Tuple2.of(pos, temp));
                 }
@@ -387,7 +409,7 @@ public class Cluster {
                 ArrayList<Tuple> tuplesToDelete = new ArrayList<>(); // TODO-Later maybe use iterator to delete tuples if performance is better
                 for(Tuple tuple: entriesCopy){
                     // adjust to find also values from arrays
-                    Object toCompare = (tuple.getField(mapEntryToDelete.f0).getClass().isArray() ? ((Object[]) tuple.getField(mapEntryToDelete.f0))[((Object[]) tuple.getField(mapEntryToDelete.f0)).length-1] : tuple.getField(mapEntryToDelete.f0));
+                    Object toCompare = comparableValue(tuple, mapEntryToDelete.f0);
                     if(toCompare.equals(mapEntryToDelete.f1.getKey())){
                         tuplesToDelete.add(tuple);
                     }
@@ -415,7 +437,7 @@ public class Cluster {
             for(Tuple tuple: entriesCopy){
                 int pos = posSensibleAttributes[0];
                 // Check for arrays
-                Object sensAttributeValue = tuple.getField(pos).getClass().isArray() ? ((Object[]) tuple.getField(pos))[((Object[]) tuple.getField(pos)).length-1] : tuple.getField(pos);
+                Object sensAttributeValue = comparableValue(tuple, pos);
                 output.add(sensAttributeValue);
             }
             return output.size();
@@ -431,7 +453,7 @@ public class Cluster {
                 counter++;
                 for (int pos : posSensibleAttributes) {
                     //noinspection ComparatorCombinators - This is apparently slightly more performant then 'Comparator.comparingLong(Map.Entry::getValue)'
-                    Map.Entry<Object, Long> temp = entriesCopy.stream().collect(Collectors.groupingBy(s -> (s.getField(pos).getClass().isArray() ? ((Object[]) s.getField(pos))[((Object[]) s.getField(pos)).length-1] : s.getField(pos)), Collectors.counting()))
+                    Map.Entry<Object, Long> temp = entriesCopy.stream().collect(Collectors.groupingBy(s -> comparableValue(s, pos), Collectors.counting()))
                             .entrySet().stream().max((attEntry1, attEntry2) -> Long.compare(attEntry1.getValue(), attEntry2.getValue())).orElse(null);
                     numOfAppearances.add(Tuple2.of(pos, temp));
                 }
@@ -441,7 +463,7 @@ public class Cluster {
                 ArrayList<Tuple> tuplesToDelete = new ArrayList<>(); // TODO-Later maybe use iterator to delete tuples if performance is better
                 for(Tuple tuple: entriesCopy){
                     // adjust to find also values from arrays
-                    Object toCompare = (tuple.getField(mapEntryToDelete.f0).getClass().isArray() ? ((Object[]) tuple.getField(mapEntryToDelete.f0))[((Object[]) tuple.getField(mapEntryToDelete.f0)).length-1] : tuple.getField(mapEntryToDelete.f0));
+                    Object toCompare = comparableValue(tuple, mapEntryToDelete.f0);
                     if(toCompare.equals(mapEntryToDelete.f1.getKey())){
                         tuplesToDelete.add(tuple);
                     }
