@@ -135,18 +135,21 @@ In `fixed-rate` mode every patient cycles through its own file independently,
 so patient files may have different lengths.
 
 #### Synthetic data
-`load-generator/generateData.py` creates the synthetic patient files (random values only):
+`load-generator/generateData.py` creates the synthetic patient files (random values only; needs
+`pip install -r load-generator/requirements.txt`):
 
 ```bash
 cd load-generator
 python3 generateData.py                    # schema v1 -> output_json_files/ (20 patients x 10000 records)
-python3 generateData.py --schema v2 --num-users 10 --num-timestamps 600 \
-    --interval-minutes 1 --seed 2          # ICU schema v2 -> output_json_files_v2/
+cd ..
+make synthetic-v2                          # ICU schema v2 -> load-generator/output_json_files_v2/
 ```
 
-`load-generator/output_json_files_v2/` contains such a v2 set (10 patients, 600 records each) with all
-optional ICU fields (demographics, rhythm, ventilation, ACVPU, ...), so the full schema can be smoke-tested
-without real data:
+The v2 data set is not committed. The load-generator image generates it at build time with the same
+arguments as `make synthetic-v2` (`--schema v2 --num-users 10 --num-timestamps 600 --interval-minutes 1
+--seed 2`): 10 patients with 600 records each. The seed and the pinned Faker version give the same values
+in every build; the timestamps start one day before generation. The set has all optional ICU fields
+(demographics, rhythm, ventilation, ACVPU, ...), so the full schema can be smoke-tested without real data:
 
 ```bash
 INPUT_DIR=output_json_files_v2 PRINK_JOB_ARGS="--profile icu-qi-v2 --outputTopic prink-topic" make up
