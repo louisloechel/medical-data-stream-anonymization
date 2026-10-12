@@ -5,3 +5,8 @@ grafana/grafana.db
 *.xml
 grafana/plugins/*
 /.vscode
+
+# Deployment: private inventories, hosts and credentials never go into git
+secrets/
+deploy/ansible/inventory/*.ini
+!deploy/ansible/inventory/hosts.example.ini
