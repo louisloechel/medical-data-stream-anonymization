@@ -30,9 +30,22 @@ This repository contains a demo application for a Master's thesis project focuse
 - [Docker Compose](https://docs.docker.com/compose/)
 
 ### Build & Run
+Runs on a single machine (Linux/macOS, amd64 or arm64) with synthetic data from `load-generator/output_json_files`.
 ```bash
-docker compose up --build
+make up            # = docker compose -p streamanon up --build -d
+make smoke-test    # end-to-end check, exits non-zero on failure (scripts/smoke-test.sh)
+make logs S="flink-taskmanager og-prink-job"   # follow logs of selected services
 ```
+Plain `docker compose up --build -d` works as well (run `scripts/smoke-test.sh` afterwards).
+The first build downloads Maven/pip dependencies and takes several minutes.
+Both Flink jobs are submitted automatically once the JobManager is ready (`scripts/flink-submit.sh`)
+and re-submitted if the cluster restarts; Grafana dashboards and the Prometheus datasource are
+provisioned from `grafana/provisioning`.
+
+#### Resource settings
+The defaults fit Docker Desktop with ~8 GB memory (JobManager 1 GB, TaskManager 2 GB, Kafka 512 MB heap;
+~6 GB in total). On a server, copy `.env.example` to `.env` and raise `FLINK_TM_PROCESS_SIZE`,
+`FLINK_TM_MEM_LIMIT` etc.; the container memory limit must be larger than the Flink process size.
 
 | Service         | URL                                                               | Default Credentials      |
 |-----------------|-------------------------------------------------------------------|-------------------------|
@@ -43,7 +56,7 @@ docker compose up --build
 
 ### ...When finished
 ```bash
-docker compose down
+make down          # = docker compose -p streamanon down  (make clean also removes the volumes)
 ```
 <details>
 <summary><strong>Dashboard Views</strong></summary>
@@ -83,7 +96,7 @@ docker compose down
 > **Note:** The consumer properties (connecting Prink to other topics) can be configured in the [GangesEvaluation.java Prink Job](og-prink/src/main/java/ganges/GangesEvaluation.java) file.
 
 #### Flink Configuration
-- The Flink configuration file is located at `flink-conf.yaml`.
+- The Flink configuration file is located at `flink-conf.yaml` (mounted read-only and used as `conf/config.yaml` by the Flink 1.19 containers; memory sizes are set via environment variables, see `.env.example`).
 - Key configurations include:
   - `jobmanager.rpc.address`: Address of the job manager.
   - `taskmanager.numberOfTaskSlots`: Number of task slots per task manager.
