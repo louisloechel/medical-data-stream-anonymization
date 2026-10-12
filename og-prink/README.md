@@ -40,6 +40,7 @@ Command line arguments override the profile: `--k --l --delta --beta --zeta --mu
 | `vitals-sensitive`    | `prink-vitals-sensitive` | ward + ICD-10 quasi-identifiers; resp/bps/pulse/spo2/temp sensitive; NEWS2 sub-scores, names dropped; caseid hashed |
 | `news2-only`          | `prink-news2-only`       | raw vitals dropped; only generalized NEWS2 sub-scores + partial NEWS2 total released (sensitive), l=2 |
 | `qi-demographics`     | `prink-qi-demographics`  | placeholder: age band, sex, ward, ICD-10 as quasi-identifiers once the data contains them |
+| `icu-qi-v2`           | `prink-icu-qi-v2`        | ICU record schema v2: ageBand, sex (hierarchies), postcode2, ward, ICD-10 (reduction) as quasi-identifiers; vitals, rhythm (hierarchy), o2 and news2Total sensitive; userid/caseid hashed; k=5, l=2 |
 
 ### Profile format
 
@@ -81,9 +82,22 @@ Field attributes:
 | `name`        | JSON key (input and output) |
 | `type`        | `int`, `long`, `float`, `double`, `string` (default). Numbers given as text are parsed; missing, JSON `null` and unparsable values become `null` |
 | `role`        | `identifier-passthrough`: released unchanged (NoneGeneralizer) · `drop`: removed before anonymization, never written · `mask`: replaced before anonymization by a salted SHA-256 hash (`strategy: hash`, salt via `salt` or – preferred – the env variable named in `saltEnv`, optional `length`) or a constant (`strategy: constant`, `value`) · `quasi-identifier`: generalized, not used for l-diversity · `sensitive`: generalized (if a generalizer is set) and used for l-diversity |
-| `generalizer` | `aggregation` (range `(min,max)`, needs `bounds: [min, max]`, numeric types) · `reduction` (trailing characters replaced by `*`) · `hierarchy` (lowest common ancestor in a tree, string type) · `none` |
+| `generalizer` | `aggregation` (range `(min,max)`, needs `bounds: [min, max]`, numeric types) · `reduction` (trailing characters replaced by `*`, see below) · `hierarchy` (lowest common ancestor in a tree, string type) · `none` |
 | `hierarchy`   | `file:` YAML/JSON (`paths:` list) or CSV (one path per line, `;` or `,` separated); looked up as given, relative to the profile, then on the classpath · `paths:` inline list of paths from general to specific · `root:` name of the root (default `<ROOT>`). Without paths the hierarchy is flat (common value or root). |
 | `weight`      | optional information-loss weight (CastleRule `infoLossMultiplier`; used if all weights sum to 1) |
+
+There is no boolean type: read booleans as `int` (`true` -> 1, `false` -> 0) and aggregate them with
+`bounds: [0, 1]` (`"(0,1)"` = mixed cluster), or as `string` (`"true"`/`"false"`) with a flat hierarchy.
+
+`reduction` replaces the last *i* characters of every value, right-aligned to the value's own length, until all
+values of the cluster are equal: `J96.11`, `J96.10` -> `J96.1*`; `J96.11`, `J96.01` -> `J96.**`. Values of
+different length only become equal when replaced completely (`J96.11`, `J96.0` -> `******`), so it works best for
+fixed-length codes (postcode prefixes, ICD-10 codes of one length). A missing value next to present ones also
+leads to complete replacement; a cluster without any value releases `null`.
+
+Bundled hierarchy files (`src/main/resources/hierarchies/`): `icd10_chapter1.yaml` (ICD-10 excerpt A00-A28),
+`age_bands.yaml` (10-year bands `0-9` ... `90-99`, `100+` -> 20-year bands `0-19` ... `60-79`, `80+`), `rhythm.yaml`
+(Philips monitor rhythm labels -> rhythm class -> group, use `root: Rhythm`).
 
 Rules enforced when the profile is loaded: a quasi-identifier needs a generalizer; `l > 0` needs at least one
 sensitive field; the data subject key must be `identifier-passthrough`, `mask` (hash) or `drop` (a dropped key is

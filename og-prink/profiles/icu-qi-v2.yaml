@@ -1,0 +1,130 @@
+# Anonymization profile: icu-qi-v2
+#
+# Example profile for the ICU record schema v2 (see the README section "Record schema"):
+#   - quasi-identifiers (generalized, define the equivalence classes):
+#       ageBand   10-year band -> 20-year band -> "*"   (hierarchies/age_bands.yaml)
+#       sex       M / F -> "*"
+#       postcode2 2-digit postcode prefix, reduction: "10" / "12" -> "1*" -> "**"
+#       ward      reduction (ward names are not known in advance, so no hierarchy can be given)
+#       icd10     reduction, e.g. J96.11 / J96.10 -> "J96.1*", J96.11 / J96.01 -> "J96.**"
+#   - sensitive attributes (generalized and protected by l-diversity):
+#       resp, spo2, bps, pulse, temp   aggregation to a (min,max) range with physiological bounds
+#       rhythm                         monitor rhythm label -> rhythm class -> group -> "Rhythm"
+#                                      (hierarchies/rhythm.yaml)
+#       o2                             on oxygen/ventilation. Prink has no boolean type: read as int
+#                                      (true -> 1, false -> 0) and aggregated to a range in [0, 1]:
+#                                      "(1,1)" = all on oxygen, "(0,0)" = all on air, "(0,1)" = mixed
+#       news2Total                     full NEWS2 total (null unless all 7 components are present),
+#                                      aggregated to a range in [0, 20]
+#   - identifiers: recordid and timestamp (producer send time, used for latency) are passed through;
+#     userid (the data subject key) and caseid are replaced by a salted hash; names are dropped
+#   - everything else is dropped (listed below for documentation; unlisted fields are dropped as well)
+#
+# Notes
+#   - ReductionGeneralizer replaces trailing characters right-aligned to each value's own length, so codes of
+#     different length (J96.11 vs. J96.0 vs. I10) are only equal once replaced completely ("******"); likewise
+#     ward names of different length. A missing value next to present ones also leads to full replacement.
+#   - The NEWS2 sub-scores are dropped: they are a deterministic function of the vitals and would reveal the
+#     band of each sensitive value. Only the total is released, generalized like the vitals; it gives the
+#     dashboards a clinically meaningful score at the cost of one more sensitive attribute.
+#   - With several sensitive attributes Prink uses the multi-attribute diversity of Gal et al.: for l = 2 every
+#     sensitive attribute needs at least two distinct values (missing counts as one) in a released cluster.
+#     Low-cardinality attributes (o2, rhythm, news2Total) make that harder; if too many clusters are
+#     suppressed on real data, set their role to drop.
+#   - userid is masked rather than passed through: the consumer and the dashboards still get a stable per-patient
+#     key, but not the source pseudonym. A stable key lets an observer link all released records of one patient;
+#     use role drop for userid (Prink still uses it internally) when that is not acceptable.
+#   - Tuple limit: 17 tuple fields + infoloss = 18 of at most 25.
+
+name: icu-qi-v2
+description: ICU schema v2 - age band, sex, postcode, ward, ICD-10 as quasi-identifiers; vitals, rhythm, O2, NEWS2 total sensitive
+
+privacy:
+  k: 5
+  l: 2
+  delta: 125
+  beta: 50000
+  zeta: 10000
+  mu: 100
+  suppressStrategy: 2
+  showInfoLoss: true
+
+kafka:
+  bootstrapServers: kafka:29092
+  inputTopic: processed-topic
+  outputTopic: prink-icu-qi-v2
+  groupId: prink-icu-qi-v2
+
+dataSubjectKey: userid
+
+fields:
+  # identifiers
+  - { name: recordid, type: string, role: identifier-passthrough }
+  - name: userid
+    type: string
+    role: mask
+    mask: { strategy: hash, saltEnv: PRINK_MASK_SALT, length: 16 }   # set the salt at job submission, never commit it
+  - name: caseid
+    type: string
+    role: mask
+    mask: { strategy: hash, saltEnv: PRINK_MASK_SALT, length: 16 }
+  - { name: username,     role: drop }
+  - { name: userinitials, role: drop }
+
+  # quasi-identifiers
+  - name: ageBand
+    type: string
+    role: quasi-identifier
+    generalizer: hierarchy
+    hierarchy:
+      root: "*"
+      file: hierarchies/age_bands.yaml
+  - name: sex
+    type: string
+    role: quasi-identifier
+    generalizer: hierarchy
+    hierarchy:
+      root: "*"
+      paths: [["M"], ["F"]]
+  - { name: postcode2, type: string, role: quasi-identifier, generalizer: reduction }
+  - { name: ward,      type: string, role: quasi-identifier, generalizer: reduction }
+  - { name: icd10,     type: string, role: quasi-identifier, generalizer: reduction }
+
+  # sensitive attributes (physiological domains)
+  - { name: resp,  type: int,    role: sensitive, generalizer: aggregation, bounds: [0, 60] }
+  - { name: spo2,  type: int,    role: sensitive, generalizer: aggregation, bounds: [50, 100] }
+  - { name: bps,   type: int,    role: sensitive, generalizer: aggregation, bounds: [40, 250] }
+  - { name: pulse, type: int,    role: sensitive, generalizer: aggregation, bounds: [20, 220] }
+  - { name: temp,  type: double, role: sensitive, generalizer: aggregation, bounds: [30.0, 45.0] }
+  - name: rhythm
+    type: string
+    role: sensitive
+    generalizer: hierarchy
+    hierarchy:
+      root: Rhythm
+      file: hierarchies/rhythm.yaml
+  - { name: o2,         type: int, role: sensitive, generalizer: aggregation, bounds: [0, 1] }
+  - { name: news2Total, type: int, role: sensitive, generalizer: aggregation, bounds: [0, 20] }
+
+  # not released
+  - { name: ectopy,            role: drop }
+  - { name: ectopyCount,       role: drop }
+  - { name: sqi,               role: drop }
+  - { name: ventMode,          role: drop }
+  - { name: acvpu,             role: drop }
+  - { name: rass,              role: drop }
+  - { name: gcs,               role: drop }
+  - { name: spo2Scale,         role: drop }
+  - { name: respNEWS,          role: drop }
+  - { name: spo2NEWS,          role: drop }
+  - { name: o2NEWS,            role: drop }
+  - { name: bpsNEWS,           role: drop }
+  - { name: pulseNEWS,         role: drop }
+  - { name: consciousnessNEWS, role: drop }
+  - { name: tempNEWS,          role: drop }
+  - { name: news2Partial,      role: drop }
+  - { name: news2Components,   role: drop }
+  - { name: news2Complete,     role: drop }
+  - { name: measured_at,       role: drop }   # exact measurement time, would ease linkage with the source system
+
+  - { name: timestamp, type: string, role: identifier-passthrough }   # producer send time, used for latency
