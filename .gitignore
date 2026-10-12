@@ -21,3 +21,6 @@ secrets/*
 private/
 # Compressed data exports
 *.csv.zip
+# Deployment: private inventories never go into git
+deploy/ansible/inventory/*.ini
+!deploy/ansible/inventory/hosts.example.ini
