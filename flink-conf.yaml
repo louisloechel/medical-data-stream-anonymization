@@ -1,12 +1,30 @@
-metrics.reporter.prom.networkInterfaces: 0.0.0.0
-blob.server.port: 6124
-metrics.reporter.prom.port: 9249
-JOB_MANAGER_RPC_ADDRESS: flink-jobmanager=
-taskmanager.memory.managed.size: 1024m
+# Flink cluster configuration shared by flink-jobmanager and flink-taskmanager.
+#
+# Flink 1.19 images read conf/config.yaml (flink-conf.yaml is ignored when
+# config.yaml exists), so docker-compose mounts this file read-only and copies
+# it to /opt/flink/conf/config.yaml at container start. The image entrypoint
+# then appends FLINK_PROPERTIES (set in docker-compose.yml), so memory sizes
+# can be changed per machine through environment variables without editing
+# this file. See README "Resource settings".
+
 jobmanager.rpc.address: flink-jobmanager
-taskmanager.numberOfTaskSlots: 2
-taskmanager.memory.task.heap.size: 2048m
-metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
-metrics.reporter.prom.class: org.apache.flink.metrics.prometheus.PrometheusReporter
-jobmanager.memory.heap.size: 2048m
+jobmanager.bind-host: 0.0.0.0
+taskmanager.bind-host: 0.0.0.0
+rest.address: flink-jobmanager
+rest.bind-address: 0.0.0.0
+blob.server.port: 6124
 query.server.port: 6125
+
+# Two streaming jobs (flink-job + Prink job) run with parallelism 1 each.
+taskmanager.numberOfTaskSlots: 4
+parallelism.default: 1
+
+# Both jobs keep their state on the heap; give the heap most of the memory.
+taskmanager.memory.managed.fraction: 0.1
+
+# Restart failed jobs instead of failing them permanently (e.g. Kafka hiccups).
+restart-strategy.type: exponential-delay
+
+# Prometheus metrics reporter (JobManager and TaskManager expose :9249).
+metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+metrics.reporter.prom.port: 9249

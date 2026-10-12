@@ -2,16 +2,19 @@ global:
   scrape_interval: 5s # How frequently Prometheus will scrape the metrics
 
 scrape_configs:
+  # Python consumer (prometheus_client): patient vitals, NEWS2, latency, info loss.
   - job_name: "kafka_consumer"
     static_configs:
       - targets: ["kafka-consumer:8000"]
-  # - job_name: "og_prink_job"
-  #   static_configs:
-  #     - targets: ["og-prink-job:9252"]
-  - job_name: "flink_job"
-    static_configs:
-      - targets: ["flink-job:9249"]
 
+  # Flink's PrometheusReporter (configured in flink-conf.yaml). Operator metrics
+  # of both jobs (e.g. Prink k/l values, information loss) are exposed by the
+  # TaskManager, cluster/job metrics by the JobManager.
+  #
+  # Note: the job-submitting containers (flink-job, og-prink-job) are only CLI
+  # clients that exit after submission; they do not expose metrics, so they
+  # are intentionally not scraped (the former "flink-job:9249" target was
+  # always down).
   - job_name: "flink_jobmanager_metrics"
     static_configs:
       - targets: ["flink-jobmanager:9249"]

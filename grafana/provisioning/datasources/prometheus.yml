@@ -1,0 +1,14 @@
+apiVersion: 1
+
+# The uid matches the datasource uid referenced by the provisioned dashboards.
+datasources:
+  - name: prometheus
+    uid: adyyzm74ahla8e
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: 5s

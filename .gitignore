@@ -25,3 +25,5 @@ private/
 secrets/
 deploy/ansible/inventory/*.ini
 !deploy/ansible/inventory/hosts.example.ini
+# Build output
+target/

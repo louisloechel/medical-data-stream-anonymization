@@ -5,3 +5,8 @@ output_dwc/
 *.csv
 *.csv.zip
 .env
+# Unused data sets / caches
+archived_output_json_files/
+output_json_files_100/
+__pycache__/
+*.pyc
