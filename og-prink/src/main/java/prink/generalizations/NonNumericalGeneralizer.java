@@ -61,7 +61,10 @@ public class NonNumericalGeneralizer implements BaseGeneralizer{
 
     @Override
     public Tuple2<String, Float> generalize() {
-        return tree.getGeneralization(false);
+        Tuple2<String, Float> generalization = tree.getGeneralization(false);
+        // All values inside the cluster are missing: release null instead of the internal placeholder
+        if(Cluster.MISSING_VALUE.equals(generalization.f0)) return Tuple2.of(null, generalization.f1);
+        return generalization;
     }
 
     @Override

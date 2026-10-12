@@ -70,6 +70,12 @@ class MissingValuesTest {
         assertNull(generalized.getField(2));
         assertEquals("A1", generalized.getField(3));
 
+        Cluster missingCodes = new Cluster(rules(), 0, false);
+        missingCodes.addEntry(Tuple5.of("p1", 1, 36.6, null, "x"));
+        missingCodes.addEntry(Tuple5.of("p2", 2, 36.7, null, "x"));
+        assertNull(missingCodes.generalize(Tuple5.of("p1", 1, 36.6, null, "x")).getField(3),
+                "a cluster without any value releases null, not the internal placeholder");
+
         // removing the only tuple with a present value resets the range
         Cluster other = new Cluster(rules(), 0, false);
         Tuple withValue = Tuple5.of("p1", 5, 36.6, "B1", "y");
