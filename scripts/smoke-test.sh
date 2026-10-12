@@ -22,7 +22,7 @@ set -uo pipefail
 TIMEOUT="${TIMEOUT:-240}"
 GRAFANA_AUTH="${GRAFANA_AUTH:-admin:${GRAFANA_ADMIN_PASSWORD:-admin}}"
 FLINK_JOB_REGEX="${FLINK_JOB_REGEX:-^Kafka Flink Job\$}"
-PRINK_JOB_REGEX="${PRINK_JOB_REGEX:-^k[0-9]+_delta}"
+PRINK_JOB_REGEX="${PRINK_JOB_REGEX:-(^|_)k[0-9]+_delta}"
 NEWS2_DASHBOARD_UID="fe0tv8jblo4xsc"
 DATASOURCE_UID="adyyzm74ahla8e"
 
