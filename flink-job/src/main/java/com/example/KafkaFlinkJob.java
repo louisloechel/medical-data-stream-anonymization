@@ -32,135 +32,20 @@ public class KafkaFlinkJob {
         FlinkKafkaConsumer<String> consumer = new FlinkKafkaConsumer<>("raw-topic", new SimpleStringSchema(), properties);
         DataStream<String> stream = env.addSource(consumer);
 
-        // Process the stream
+        // Process the stream: compute NEWS2 sub-scores for every raw record
         DataStream<String> processedStream = stream.flatMap(new FlatMapFunction<String, String>() {
-            private final ObjectMapper objectMapper = new ObjectMapper();
+            private transient ObjectMapper objectMapper;
 
             @Override
-            public void flatMap(String value, Collector<String> out) throws Exception {
-                // Parse the JSON message
-                JsonNode jsonNode = objectMapper.readTree(value);
-                int recordid = jsonNode.get("recordid").asInt();
-                String userid = jsonNode.get("userid").asText();
-                String username = jsonNode.get("username").asText();
-                int resp = jsonNode.get("resp").asInt();
-                int bps = jsonNode.get("bps").asInt();
-                int pulse = jsonNode.get("pulse").asInt();
-                double temp = jsonNode.get("temp").asDouble();
-                String icd10 = jsonNode.get("icd10").asText();
-                String timestamp = jsonNode.get("timestamp").asText();
-
-                // Log the received message
-                LOG.info("[flink-job] Received message: {}", jsonNode);
-
-                //--------------------------------------------------------------------------------|
-                //--------------------------------------------------------------------------------|
-                // This is where the privacy enhancing transformation would be implemented
-                // The transformation would be applied to the variables resp, bps, pulse, and temp
-                // The transformed values would be stored in the same variables as their NEWS2 counterparts
-                // The transformed values would be used to calculate the NEWS2 score
-                
-                // Respiration rate per minute
-                int newsResp = resp;
-                // Systolic blood pressure
-                int newsBps = bps;
-                // Pulse rate per minute
-                int newsPulse = pulse;
-                // Temperature in degrees Celsius
-                double newsTemp = temp;
-
-                // Convert measurements into NEWS2 scores
-                // 1. Respiration rate per minute
-                int newsRespScore;
-                if (newsResp >= 0 && newsResp <= 8) {
-                    newsRespScore = 3;
-                } else if (newsResp >= 9 && newsResp <= 11) {
-                    newsRespScore = 1;
-                } else if (newsResp >= 12 && newsResp <= 20) {
-                    newsRespScore = 0;
-                } else if (newsResp >= 21 && newsResp <= 24) {
-                    newsRespScore = 3;
-                } else if (newsResp >= 25) {
-                    newsRespScore = 3;
-                } else {
-                    newsRespScore = -1;
+            public void flatMap(String value, Collector<String> out) {
+                if (objectMapper == null) {
+                    objectMapper = new ObjectMapper();
                 }
-
-                // 2. Systolic blood pressure
-                int newsBpsScore;
-                if (newsBps >= 0 && newsBps <= 90) {
-                    newsBpsScore = 3;
-                } else if (newsBps >= 91 && newsBps <= 100) {
-                    newsBpsScore = 2;
-                } else if (newsBps >= 101 && newsBps <= 110) {
-                    newsBpsScore = 1;
-                } else if (newsBps >= 111 && newsBps <= 219) {
-                    newsBpsScore = 0;
-                } else if (newsBps >= 220) {
-                    newsBpsScore = 3;
-                } else {
-                    newsBpsScore = -1;
+                String processed = process(objectMapper, value);
+                if (processed != null) {
+                    out.collect(processed);
+                    LOG.debug("[flink-job] Processed message: {}", processed);
                 }
-
-                // 3. Pulse rate per minute
-                int newsPulseScore;
-                if (newsPulse >= 0 && newsPulse <= 40) {
-                    newsPulseScore = 3;
-                } else if (newsPulse >= 41 && newsPulse <= 50) {
-                    newsPulseScore = 1;
-                } else if (newsPulse >= 51 && newsPulse <= 90) {
-                    newsPulseScore = 0;
-                } else if (newsPulse >= 91 && newsPulse <= 110) {
-                    newsPulseScore = 1;
-                } else if (newsPulse >= 111 && newsPulse <= 130) {
-                    newsPulseScore = 2;
-                } else if (newsPulse >= 131) {
-                    newsPulseScore = 3;
-                } else {
-                    newsPulseScore = -1;
-                }
-
-                // 4. Temperature in degrees Celsius
-                int newsTempScore;
-                if (newsTemp >= 0 && newsTemp <= 35.0) {
-                    newsTempScore = 3;
-                } else if (newsTemp > 35.0 && newsTemp <= 36.0) {
-                    newsTempScore = 0;
-                } else if (newsTemp > 36.0 && newsTemp <= 38.0) {
-                    newsTempScore = 1;
-                } else if (newsTemp > 38.0 && newsTemp <= 39.0) {
-                    newsTempScore = 2;
-                } else if (newsTemp > 39.0) {
-                    newsTempScore = 3;
-                } else {
-                    newsTempScore = -1;
-                }
-                
-
-                //--------------------------------------------------------------------------------|
-                //--------------------------------------------------------------------------------|
-
-                // Create a new JSON object with the same format
-                ObjectNode outputJson = objectMapper.createObjectNode();
-                outputJson.put("recordid", recordid);
-                outputJson.put("userid", userid);
-                outputJson.put("username", username);
-                outputJson.put("resp", resp);
-                outputJson.put("respNEWS", newsRespScore);
-                outputJson.put("bps", bps);
-                outputJson.put("bpsNEWS", newsBpsScore);
-                outputJson.put("pulse", pulse);
-                outputJson.put("pulseNEWS", newsPulseScore);
-                outputJson.put("temp", temp);
-                outputJson.put("tempNEWS", newsTempScore);
-                outputJson.put("icd10", icd10);
-                outputJson.put("timestamp", timestamp);
-
-                // Collect the JSON string
-                out.collect(outputJson.toString());
-
-                // Log the processed message
-                LOG.info("[flink-job] Processed message: {}", outputJson);
             }
         });
 
@@ -176,5 +61,93 @@ public class KafkaFlinkJob {
 
         // Execute the Flink job
         env.execute("Kafka Flink Job");
+    }
+
+    /** Fields copied unchanged from raw-topic to processed-topic (if present). */
+    private static final String[] PASS_THROUGH = {
+            "userid", "caseid", "username", "userinitials", "ward"
+    };
+
+    /**
+     * Parses one raw-topic record and returns the processed-topic record, or
+     * null if the record cannot be used (invalid JSON or no userid).
+     * Missing or null vital signs yield a null sub-score; news2Partial is the
+     * sum of the available sub-scores and news2Components their number.
+     */
+    static String process(ObjectMapper objectMapper, String value) {
+        JsonNode in;
+        try {
+            in = objectMapper.readTree(value);
+        } catch (Exception e) {
+            LOG.warn("[flink-job] Skipping invalid JSON record: {}", e.getMessage());
+            return null;
+        }
+        if (in == null || !in.isObject() || !hasValue(in, "userid")) {
+            LOG.warn("[flink-job] Skipping record without userid");
+            return null;
+        }
+
+        Integer respScore = News2.respScore(numeric(in, "resp"));
+        Integer bpsScore = News2.systolicScore(numeric(in, "bps"));
+        Integer pulseScore = News2.pulseScore(numeric(in, "pulse"));
+        Integer spo2Score = News2.spo2Score(numeric(in, "spo2"));
+        Integer tempScore = News2.tempScore(numeric(in, "temp"));
+
+        ObjectNode out = objectMapper.createObjectNode();
+        out.put("recordid", hasValue(in, "recordid") ? in.get("recordid").asText() : null);
+        for (String field : PASS_THROUGH) {
+            copy(in, out, field);
+        }
+        copy(in, out, "resp");
+        out.put("respNEWS", respScore);
+        copy(in, out, "bps");
+        out.put("bpsNEWS", bpsScore);
+        copy(in, out, "pulse");
+        out.put("pulseNEWS", pulseScore);
+        copy(in, out, "spo2");
+        out.put("spo2NEWS", spo2Score);
+        copy(in, out, "temp");
+        out.put("tempNEWS", tempScore);
+        out.put("news2Partial", News2.partialSum(respScore, bpsScore, pulseScore, spo2Score, tempScore));
+        out.put("news2Components", News2.components(respScore, bpsScore, pulseScore, spo2Score, tempScore));
+        copy(in, out, "icd10");
+        if (in.has("measured_at")) {
+            copy(in, out, "measured_at");
+        }
+        copy(in, out, "timestamp");
+        return out.toString();
+    }
+
+    private static boolean hasValue(JsonNode node, String field) {
+        JsonNode v = node.get(field);
+        return v != null && !v.isNull();
+    }
+
+    private static void copy(JsonNode in, ObjectNode out, String field) {
+        JsonNode v = in.get(field);
+        if (v == null) {
+            out.putNull(field);
+        } else {
+            out.set(field, v);
+        }
+    }
+
+    /** Numeric value of a field (number or numeric string), or null. */
+    static Double numeric(JsonNode node, String field) {
+        JsonNode v = node.get(field);
+        if (v == null || v.isNull()) {
+            return null;
+        }
+        if (v.isNumber()) {
+            return v.asDouble();
+        }
+        if (v.isTextual()) {
+            try {
+                return Double.parseDouble(v.asText().trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
     }
 }

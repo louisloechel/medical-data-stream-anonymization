@@ -6,7 +6,7 @@ import time
 import numpy as np
 from statsmodels.tsa.holtwinters import SimpleExpSmoothing
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 # Prometheus counter for tracking the number of messages
@@ -155,6 +155,10 @@ def train_and_predict(message, topic):
 #-----------------------------------------
 
 def process_value(value):
+    # Prink generalises values to strings such as "(123,456)"; numbers and
+    # None (missing measurement) are passed through unchanged.
+    if not isinstance(value, str):
+        return value
     # if value is empty string, skip
     if value == '':
         return None
@@ -165,17 +169,29 @@ def process_value(value):
         value = round(value_avg, 0)
     return value
 
+def parse_timestamp(value):
+    """Parse the producer's send timestamp (ISO-8601, e.g.
+    2026-01-01T12:00:00.123Z or ...+00:00) to epoch seconds. Timestamps
+    without an offset are interpreted as UTC. Returns None if unparseable."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.strip().replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
 def handle_message(message, topic, time_now):
     try:
         userid = message.get('userid')
         if userid is None:
             print("Skipping message without 'userid'", flush=True)
             return
-        icd10 = message.get('icd10', 'unknown')
-        timestamp_str = message.get('timestamp')
-        if timestamp_str:
-            timestamp_dt = datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S.%fZ")
-            timestamp = timestamp_dt.timestamp()
+        icd10 = message.get('icd10') or 'unknown'  # missing or null
+        timestamp = parse_timestamp(message.get('timestamp'))
+        if timestamp is not None:
             delta = time_now - timestamp
             PROCESSING_LATENCY.labels(userid=userid, topic=topic).set(delta)
             # print(f"Processing latency for {userid} on topic {topic}: {delta:.2f} seconds", flush=True)
