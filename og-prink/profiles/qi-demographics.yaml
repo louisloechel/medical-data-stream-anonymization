@@ -1,0 +1,80 @@
+# Anonymization profile: qi-demographics (PLACEHOLDER)
+#
+# Target setup once the data contains demographic attributes: age band, sex, ward and ICD-10 chapter
+# act as quasi-identifiers, the vitals are sensitive.
+#
+# The current processed-topic schema does NOT contain `ageBand` or `sex` yet. Missing fields are read as
+# null, so the profile already runs, but these two quasi-identifiers carry no information until the
+# producer adds them (expected: ageBand as one of the leaf labels below, sex as F / M / D / X).
+
+name: qi-demographics
+description: "Placeholder: age band, sex, ward and ICD-10 as quasi-identifiers, vitals sensitive"
+
+privacy:
+  k: 5
+  l: 3
+  delta: 125
+  beta: 50000
+  zeta: 10000
+  mu: 100
+  suppressStrategy: 2
+  showInfoLoss: true
+
+kafka:
+  bootstrapServers: kafka:29092
+  inputTopic: processed-topic
+  outputTopic: prink-qi-demographics
+  groupId: prink-qi-demographics
+
+dataSubjectKey: userid
+
+fields:
+  - { name: recordid, type: string, role: identifier-passthrough }
+  - { name: userid,   type: string, role: identifier-passthrough }
+  - { name: username, type: string, role: drop }
+
+  # quasi-identifiers
+  - name: ageBand
+    type: string
+    role: quasi-identifier
+    generalizer: hierarchy
+    hierarchy:
+      root: "*"
+      paths:
+        - ["0-39", "0-17"]
+        - ["0-39", "18-29"]
+        - ["0-39", "30-39"]
+        - ["40-69", "40-49"]
+        - ["40-69", "50-59"]
+        - ["40-69", "60-69"]
+        - ["70+", "70-79"]
+        - ["70+", "80-89"]
+        - ["70+", "90+"]
+  - name: sex
+    type: string
+    role: quasi-identifier
+    generalizer: hierarchy
+    hierarchy:
+      root: "*"
+      paths: [["F"], ["M"], ["D"], ["X"]]
+  - name: ward
+    type: string
+    role: quasi-identifier
+    generalizer: hierarchy
+    hierarchy:
+      root: "*"
+  - name: icd10
+    type: string
+    role: quasi-identifier
+    generalizer: hierarchy
+    hierarchy:
+      file: hierarchies/icd10_chapter1.yaml
+
+  # sensitive attributes
+  - { name: resp,  type: int,    role: sensitive, generalizer: aggregation, bounds: [0, 60] }
+  - { name: bps,   type: int,    role: sensitive, generalizer: aggregation, bounds: [40, 250] }
+  - { name: pulse, type: int,    role: sensitive, generalizer: aggregation, bounds: [20, 220] }
+  - { name: spo2,  type: int,    role: sensitive, generalizer: aggregation, bounds: [50, 100] }
+  - { name: temp,  type: double, role: sensitive, generalizer: aggregation, bounds: [30.0, 45.0] }
+
+  - { name: timestamp, type: string, role: identifier-passthrough }

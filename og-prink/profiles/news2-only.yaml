@@ -1,0 +1,70 @@
+# Anonymization profile: news2-only
+#
+# Data minimization: the raw vitals are dropped before anonymization, only the NEWS2 sub-scores
+# (0-3 per parameter) and the partial NEWS2 total are released, generalized to ranges and protected by
+# l-diversity.
+# Ward and ICD-10 code are quasi-identifiers.
+#
+# NEWS2 sub-scores are heavily skewed towards 0. With several sensitive attributes Prink uses the
+# multi-attribute diversity of Gal et al. (a cluster is l-diverse if l rounds of removing the most frequent
+# value of any sensitive attribute are needed), so l: 2 is used here; l: 3 leads to many suppressions.
+
+name: news2-only
+description: Only generalized NEWS2 sub-scores are released, raw vitals are dropped
+
+privacy:
+  k: 5
+  l: 2
+  delta: 125
+  beta: 50000
+  zeta: 10000
+  mu: 100
+  suppressStrategy: 2
+  showInfoLoss: true
+
+kafka:
+  bootstrapServers: kafka:29092
+  inputTopic: processed-topic
+  outputTopic: prink-news2-only
+  groupId: prink-news2-only
+
+dataSubjectKey: userid
+
+fields:
+  - { name: recordid, type: string, role: identifier-passthrough }
+  - { name: userid,   type: string, role: identifier-passthrough }
+  - { name: username, type: string, role: drop }
+
+  # raw vitals never leave the job
+  - { name: resp,  type: int,    role: drop }
+  - { name: bps,   type: int,    role: drop }
+  - { name: pulse, type: int,    role: drop }
+  - { name: spo2,  type: int,    role: drop }
+  - { name: temp,  type: double, role: drop }
+
+  # quasi-identifiers
+  - name: ward
+    type: string
+    role: quasi-identifier
+    generalizer: hierarchy
+    hierarchy:
+      root: "*"
+  - name: icd10
+    type: string
+    role: quasi-identifier
+    generalizer: hierarchy
+    hierarchy:
+      file: hierarchies/icd10_chapter1.yaml
+
+  # released NEWS2 sub-scores
+  - { name: respNEWS,  type: int, role: sensitive, generalizer: aggregation, bounds: [0, 3] }
+  - { name: bpsNEWS,   type: int, role: sensitive, generalizer: aggregation, bounds: [0, 3] }
+  - { name: pulseNEWS, type: int, role: sensitive, generalizer: aggregation, bounds: [0, 3] }
+  - { name: spo2NEWS,  type: int, role: sensitive, generalizer: aggregation, bounds: [0, 3] }
+  - { name: tempNEWS,  type: int, role: sensitive, generalizer: aggregation, bounds: [0, 3] }
+  # partial NEWS2 total over the available sub-scores (max. 20 for the full score)
+  - { name: news2Partial, type: int, role: sensitive, generalizer: aggregation, bounds: [0, 20] }
+  - { name: news2Components, role: drop }
+
+  - { name: timestamp,   type: string, role: identifier-passthrough }
+  - { name: measured_at, type: string, role: identifier-passthrough }
