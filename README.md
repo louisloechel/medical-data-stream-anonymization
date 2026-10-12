@@ -157,6 +157,53 @@ make smoke-test
 (the profile itself writes to `prink-icu-qi-v2`). Set `PRINK_MASK_SALT` for the Prink job to salt the
 hashed `userid`/`caseid` (see `og-prink/README.md`).
 
+### Record schema
+
+Records are JSON objects, one per patient and point in time. All fields except `userid` are optional and may
+be missing or JSON `null`; records of the original synthetic schema (v1) remain valid.
+
+**raw-topic** (producer; schema v2 = v1 + ICU fields)
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `recordid`, `userid`, `caseid` | string | record id, patient id (data subject), case id |
+| `username`, `userinitials` | string | patient name (synthetic data only) |
+| `resp`, `bps`, `pulse`, `spo2` | number | respiration rate /min, systolic BP mmHg, pulse /min, SpO2 % |
+| `temp` | number | temperature °C |
+| `measured_at` | string | measurement time (ISO-8601), used by `REPLAY_MODE=original-timing` |
+| `timestamp` | string | producer send time (ISO-8601 UTC), added by the producer, used for latency |
+| `ageBand` | string | 10-year age band, e.g. `"60-69"`, `"100+"` |
+| `sex` | string | `"M"`, `"F"` or null |
+| `postcode2` | string | first two digits of the postcode, e.g. `"10"` |
+| `ward` | string | ward name |
+| `icd10` | string | ICD-10-GM code, e.g. `"J96.11"` |
+| `rhythm` | string | ECG rhythm label of the patient monitor (Philips), e.g. `"Sinus-Rhythmus"` |
+| `ectopy`, `ectopyCount` | string, int | ectopy category and count |
+| `sqi` | string | signal quality `Good` / `Fair` / `Bad` |
+| `ventMode` | string | ventilation mode |
+| `o2` | boolean | on supplemental oxygen or ventilation (NEWS2 "air or oxygen") |
+| `acvpu` | string | consciousness `"A"`, `"C"`, `"V"`, `"P"` or `"U"` |
+| `rass`, `gcs` | int | Richmond Agitation-Sedation Scale, Glasgow Coma Scale |
+| `spo2Scale` | int | NEWS2 SpO2 scale `1` (default when missing) or `2` |
+
+**processed-topic** (`flink-job`): a copy of the raw record (all fields, including unknown ones) plus the
+NEWS2 (RCP 2017) fields below. `recordid`, `userid`, `caseid`, `username`, `userinitials`, `ward`, `resp`,
+`bps`, `pulse`, `spo2`, `temp`, `icd10` and `timestamp` are always present (null if missing).
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `respNEWS`, `spo2NEWS`, `o2NEWS`, `bpsNEWS`, `pulseNEWS`, `consciousnessNEWS`, `tempNEWS` | int or null | sub-scores; null if the input is missing or invalid. `spo2NEWS` uses scale 2 if `spo2Scale` is 2 (on scale 2, SpO2 >= 93 without known `o2` gives null) |
+| `news2Partial` | int | sum of the available sub-scores |
+| `news2Components` | int | number of available sub-scores (0-7) |
+| `news2Complete` | boolean | all seven sub-scores available |
+| `news2Total` | int or null | NEWS2 total, only if `news2Complete` |
+
+**Prink output** depends on the anonymization profile (see `og-prink/README.md`). With `icu-qi-v2`: `recordid`,
+`userid` (salted hash), `caseid` (salted hash), `ageBand`, `sex`, `postcode2`, `ward`, `icd10` (generalized
+quasi-identifiers), `resp`, `spo2`, `bps`, `pulse`, `temp`, `o2`, `news2Total` (ranges such as `"(36.0,38.7)"`),
+`rhythm` (label or a generalization such as `"Supraventricular"`), `timestamp` and `infoloss`; all values as
+strings or null. Every other field is dropped.
+
 ## Third-Party Licenses
 This project uses third-party components:
 - Apache Kafka, Zookeeper, Flink, Prometheus (Apache 2.0)
