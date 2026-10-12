@@ -20,7 +20,8 @@ services:
       KAFKA_LISTENERS: INSIDE://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
       KAFKA_INTER_BROKER_LISTENER_NAME: INSIDE
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_CREATE_TOPICS: "raw-topic1:1, processed-topic1:1"
+      # name:partitions:replicas; must match the topics used by the pipeline
+      KAFKA_CREATE_TOPICS: "raw-topic:1:1,processed-topic:1:1,prink-topic:1:1"
     depends_on:
       - zookeeper
     networks:

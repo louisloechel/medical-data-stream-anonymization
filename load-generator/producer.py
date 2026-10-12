@@ -1,9 +1,38 @@
 import time
 from kafka import KafkaProducer
-from kafka.errors import KafkaError, NoBrokersAvailable, KafkaTimeoutError # type: ignore
+from kafka.admin import KafkaAdminClient, NewTopic  # type: ignore
+from kafka.errors import KafkaError, NoBrokersAvailable, KafkaTimeoutError, TopicAlreadyExistsError # type: ignore
 import json
 import traceback
 import os
+
+# Topics used by the pipeline (producer -> flink-job -> prink job -> consumer)
+PIPELINE_TOPICS = ['raw-topic', 'processed-topic', 'prink-topic']
+
+
+def ensure_topics(bootstrap, topics):
+    """Create the pipeline topics if they do not exist yet, so that downstream
+    jobs can subscribe before the first record arrives. Replaces the former
+    dummy '{}' messages, which polluted processed-topic and prink-topic."""
+    try:
+        admin = KafkaAdminClient(bootstrap_servers=bootstrap)
+    except KafkaError as e:
+        print(f'{time.strftime("%Y-%m-%d %H:%M:%S")} Could not create admin client: {e}', flush=True)
+        return
+    try:
+        existing = set(admin.list_topics())
+        for name in topics:
+            if name in existing:
+                continue
+            try:
+                admin.create_topics([NewTopic(name=name, num_partitions=1, replication_factor=1)])
+                print(f'{time.strftime("%Y-%m-%d %H:%M:%S")} Created topic {name}', flush=True)
+            except TopicAlreadyExistsError:
+                pass
+            except KafkaError as e:
+                print(f'{time.strftime("%Y-%m-%d %H:%M:%S")} Could not create topic {name}: {e}', flush=True)
+    finally:
+        admin.close()
 
 # SLEEP_TIME = 0.002    # 500Hz frequency (1/500 seconds)
 # SLEEP_TIME = 0.004    # 250Hz frequency (1/250 seconds)
@@ -48,23 +77,8 @@ def main():
                 retries=0  # Do not retry indefinitely
             )
             topic = 'raw-topic'
+            ensure_topics('kafka:29092', PIPELINE_TOPICS)
 
-            producer2 = KafkaProducer(
-                bootstrap_servers='kafka:29092',
-                max_block_ms=10000,  # Fail if unable to send after 10 seconds
-                retries=0  # Do not retry indefinitely
-            )
-            topic2 = 'processed-topic'
-            producer2.send(topic2, value=b'{}')
-
-            producer3 = KafkaProducer(
-                bootstrap_servers='kafka:29092',
-                max_block_ms=10000,  # Fail if unable to send after 10 seconds
-                retries=0  # Do not retry indefinitely
-            )
-            topic3 = 'prink-topic'
-            producer3.send(topic3, value=b'{}')
-            
             while True:
                 print(f'{time.strftime("%Y-%m-%d %H:%M:%S")} Sending messages...', flush=True)
                 if message_count >= len(data):
