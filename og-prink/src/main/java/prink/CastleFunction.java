@@ -508,13 +508,13 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
     private Collection<Cluster> split(Cluster input) {
         // Output cluster. See 'SC' in CASTLE Paper definition
         ArrayList<Cluster> output = new ArrayList<>();
-        HashMap<Long, ArrayList<Tuple>> buckets = generateBuckets(input);
+        HashMap<Object, ArrayList<Tuple>> buckets = generateBuckets(input);
 
         while(buckets.size() >= k){
             // Randomly select a bucket and select one tuple
             int random = new Random().nextInt(buckets.size());
-            List<Long> ids = new ArrayList<>(buckets.keySet());
-            long selectedBucketId = ids.get(random);
+            List<Object> ids = new ArrayList<>(buckets.keySet());
+            Object selectedBucketId = ids.get(random);
             ArrayList<Tuple> selectedBucket = buckets.get(selectedBucketId);
             Tuple selectedTuple = selectedBucket.get(0);
 
@@ -526,15 +526,15 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
             if(selectedBucket.size() <= 0) buckets.remove(selectedBucketId);
 
             // Find buckets with the smallest distance to 'selectedTuple'
-            ArrayList<Tuple2<Long, Float>> distances = new ArrayList<>();
-            for(Map.Entry<Long, ArrayList<Tuple>> bucketEntry : buckets.entrySet()){
+            ArrayList<Tuple2<Object, Float>> distances = new ArrayList<>();
+            for(Map.Entry<Object, ArrayList<Tuple>> bucketEntry : buckets.entrySet()){
                 if(bucketEntry.getValue().equals(selectedBucket)) continue;
                 // Pick one of the tuples and calculate the distance to 'selectedTuple'
                 distances.add(new Tuple2<>(bucketEntry.getKey(), newCluster.enlargementValue(bucketEntry.getValue().get(0))));
             }
             distances.sort(Comparator.comparing(o -> (o.f1)));
 
-            for(Tuple2<Long, Float> entry: distances.subList(0,k-1)){
+            for(Tuple2<Object, Float> entry: distances.subList(0,k-1)){
                 ArrayList<Tuple> bucket = buckets.get(entry.f0);
                 Tuple firstTuple = bucket.get(0);
                 // Shift tuple from bucket into new cluster
@@ -546,7 +546,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
             output.add(newCluster);
         }
 
-        for(Map.Entry<Long, ArrayList<Tuple>> bucketEntry : buckets.entrySet()){
+        for(Map.Entry<Object, ArrayList<Tuple>> bucketEntry : buckets.entrySet()){
             // Find the nearest cluster for remaining buckets
             float nearestDistance = Float.MAX_VALUE;
             Cluster nearestCluster = null;
@@ -789,11 +789,12 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
      * @param input Cluster with tuples to create HashMap
      * @return HashMap of all tuples sorted in 'buckets' based on tuple id
      */
-    private HashMap<Long, ArrayList<Tuple>> generateBuckets(Cluster input) {
-        HashMap<Long, ArrayList<Tuple>> output = new HashMap<>();
+    private HashMap<Object, ArrayList<Tuple>> generateBuckets(Cluster input) {
+        HashMap<Object, ArrayList<Tuple>> output = new HashMap<>();
 
         for(Tuple tuple: input.getAllEntries()){
-            long tupleId = tuple.getField(posTupleId);
+            // Ids can be of any type (e.g. String patient numbers), so do not cast to long
+            Object tupleId = tuple.getField(posTupleId);
             output.putIfAbsent(tupleId, new ArrayList<>());
             output.get(tupleId).add(tuple);
         }

@@ -7,6 +7,7 @@ import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple4;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.KeyedBroadcastOperatorTestHarness;
@@ -537,4 +538,33 @@ public class CastleFunctionTest {
         }
     }
 
+
+    /**
+     * With l = 0 a large cluster is split via split()/generateBuckets(). The data subject ids must not be
+     * required to be Long values (e.g. patient numbers are Strings with leading zeros).
+     */
+    @Test
+    public void testSplitWithStringDataSubjectIds() throws Exception {
+        int k = 2;
+        int l = 0;
+        int delta = 10;
+
+        CastleFunction<String, Tuple3<String, Float, Integer>, Tuple3<Object, Object, Object>> castleFunction =
+                new CastleFunction<>(0, k, l, delta, 50, 10, 10, false, 2);
+
+        try (KeyedBroadcastOperatorTestHarness<String, Tuple3<String, Float, Integer>, CastleRule, Tuple3<Object, Object, Object>> harness =
+                     ProcessFunctionTestHarnesses.forKeyedBroadcastProcessFunction(castleFunction, tuple -> tuple.getField(0), Types.STRING, ruleStateDescriptor)) {
+
+            harness.processBroadcastElement(new CastleRule(0, new NoneGeneralizer(), false), 0);
+            harness.processBroadcastElement(new CastleRule(1, new AggregationFloatGeneralizer(Tuple2.of(0f, 100f)), false), 0);
+            harness.processBroadcastElement(new CastleRule(2, new NoneGeneralizer(), false), 0);
+
+            // identical QI values -> one cluster with 11 distinct data subjects (>= 2k) -> split() is used
+            for (int i = 0; i <= delta; i++) {
+                harness.processElement(new StreamRecord<>(Tuple3.of(String.format("%07d", i), 42f, i), i));
+            }
+
+            assertTrue(harness.extractOutputStreamRecords().size() >= 2 * k);
+        }
+    }
 }
