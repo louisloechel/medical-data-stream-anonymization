@@ -1,4 +1,6 @@
-FROM maven as build
+# Pinned build image: the pom targets Java 8 bytecode; an unpinned `maven` image may ship a JDK that no
+# longer supports that target. Temurin 11 builds Java 8 bytecode and runs the Flink 1.15 build tooling.
+FROM maven:3.9-eclipse-temurin-11 AS build
 WORKDIR /app
 COPY pom.xml .
 COPY src ./src
