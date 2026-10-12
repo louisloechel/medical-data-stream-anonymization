@@ -11,13 +11,24 @@ Deploys the whole stack (Kafka, Flink + jobs, Prink, Prometheus, Grafana) with
    `/data/stream-anon/input` and `/data/stream-anon/secrets` (mode `0700`).
 3. Clones/updates the repository into `/opt/medical-data-stream-anonymization`
    at `app_version` (branch, tag or commit; default `main`).
-4. Keeps Grafana's runtime state in `/var/lib/stream-anon/grafana` (seeded once
-   from `grafana/` in the repo) via an Ansible-managed compose override, so the
-   checkout stays clean and Grafana (uid 472) can write its database.
-5. Builds and starts the stack, then waits until the Flink jobs are `RUNNING`.
+4. Writes an Ansible-managed compose override (`/etc/stream-anon/docker-compose.deploy.yml`) that
+   - keeps Grafana's runtime state in `/var/lib/stream-anon/grafana` (seeded once
+     from `grafana/` in the repo), so the checkout stays clean and Grafana (uid 472)
+     can write its database;
+   - publishes every container port on `127.0.0.1` only (`bind_ports_to_localhost`).
+     `docker-compose.yml` publishes on `0.0.0.0`, and Docker bypasses host firewalls,
+     so this is a second line of defence behind the cloud security group.
+     Needs Docker Compose >= 2.24.4 (`!override`).
+5. Builds and starts the stack, then waits until exactly the expected number of
+   Flink jobs is `RUNNING`.
 
-When the deployed commit changes, the stack is stopped first (`compose_clean_restart: auto`)
-so that no duplicate Flink jobs keep running in the old JobManager.
+Images are rebuilt only when the checked-out commit changes (or with
+`-e compose_rebuild=true`). In that case, and when the compose override changes,
+the stack is taken down first: `flink-job` and `og-prink-job` are one-shot job
+submitters, so recreating them while the JobManager keeps running would submit
+duplicate jobs, and a recreated Kafka cannot register while ZooKeeper still
+holds the old broker. Re-running the playbook without changes leaves the running
+stack alone.
 
 ## Usage
 
@@ -42,12 +53,14 @@ Useful variables (`-e key=value`):
 | `data_dir`                    | `/data/stream-anon`                      | Private data root (`input/`, `secrets/`) |
 | `compose_extra_files`         | `[]`                                     | Extra compose files (absolute paths), e.g. a private override in `/data/stream-anon/secrets` that mounts `/data/stream-anon/input` |
 | `compose_clean_restart`       | `auto`                                   | `auto` / `always` / `never` stop the stack before `up` |
+| `compose_rebuild`             | `false`                                  | Rebuild images (and restart cleanly) without a new commit |
+| `bind_ports_to_localhost`     | `true`                                   | Publish container ports on 127.0.0.1 only |
 | `grafana_reset`               | `false`                                  | Re-seed Grafana state from the repo |
 | `flink_expected_running_jobs` | `2`                                      | Jobs to wait for (`0` disables the check) |
 
 ## Accessing the UIs (SSH tunnel)
 
-No service port is exposed publicly; only SSH is allowed. Forward the ports:
+No service port is reachable from outside the VM; only SSH is. Forward the ports:
 
 ```bash
 ssh -N -L 3000:localhost:3000 -L 8081:localhost:8081 -L 9090:localhost:9090 <vm>
