@@ -262,8 +262,8 @@ services:
     entrypoint: ["/opt/scripts/flink-submit.sh"]
     environment:
       JAR: /opt/flink/usrlib/artifacts/1/prink-0.6.jar
-      # Default job name is "k<k>_delta<delta>_l<l>_beta<beta>_zeta<zeta>_mu<mu>"
-      JOB_NAME_REGEX: "^k[0-9]+_delta"
+      # Default job name is "<profile>_k<k>_delta<delta>_l<l>_beta<beta>_zeta<zeta>_mu<mu>"
+      JOB_NAME_REGEX: "(^|_)k[0-9]+_delta"
       JOB_ARGS: ${PRINK_JOB_ARGS:-}
     volumes:
       - ./scripts/flink-submit.sh:/opt/scripts/flink-submit.sh:ro
