@@ -43,6 +43,13 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 public class GangesEvaluation {
 
+    /**
+     * Tuple position of the data subject identifier (patient number, JSON field {@code userid}).
+     * Prink counts k over distinct values of this field, so it must be used both for {@code keyBy()}
+     * and as {@code posTupleId} of the {@link CastleFunction}.
+     */
+    static final int POS_DATA_SUBJECT_ID = 1;
+
     int k = 5;
     int l = 3;
     int delta = 125;
@@ -107,17 +114,17 @@ public class GangesEvaluation {
             .returns(TypeInformation.of(new TypeHint<Tuple13<Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object>>() {
                 }))
             .filter(tuple -> {
-                Object key = tuple.getField(0);
+                Object key = tuple.getField(POS_DATA_SUBJECT_ID);
                 if (key == null) {
                 System.err.println("Null key encountered: " + tuple);
                     return false;
                 }
                 return true;
             })
-            .keyBy(tuple -> tuple.getField(0))
+            .keyBy(tuple -> tuple.getField(POS_DATA_SUBJECT_ID))
             .connect(ruleBroadcastStream)
-            .process(new CastleFunction<Long, Tuple13<Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object>, Tuple14<Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object>>(
-                0, k, l, delta, beta, zeta, mu, true, 2, rules))
+            .process(new CastleFunction<String, Tuple13<Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object>, Tuple14<Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object>>(
+                POS_DATA_SUBJECT_ID, k, l, delta, beta, zeta, mu, true, 2, rules))
             .returns(TypeInformation.of(new TypeHint<Tuple14<Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object>>() {
                 }))
             .name(evalDescription);
