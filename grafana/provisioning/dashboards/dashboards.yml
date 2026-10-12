@@ -1,0 +1,14 @@
+apiVersion: 1
+
+# Dashboards are loaded from JSON files in ./json (exported from the former
+# grafana/grafana.db). Edits made in the UI are kept in the grafana-data volume
+# only; to persist a change, export the dashboard JSON and replace the file here.
+providers:
+  - name: medical-data-stream-anonymization
+    type: file
+    disableDeletion: true
+    allowUiUpdates: true
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
+      foldersFromFilesStructure: false
