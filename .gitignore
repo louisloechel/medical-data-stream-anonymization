@@ -27,3 +27,4 @@ deploy/ansible/inventory/*.ini
 !deploy/ansible/inventory/hosts.example.ini
 # Build output
 target/
+.pytest_cache/

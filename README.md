@@ -123,16 +123,30 @@ settable in `docker-compose.yml` / `.env`):
 
 | Variable          | Default             | Meaning                                                        |
 |-------------------|---------------------|----------------------------------------------------------------|
-| `INPUT_DIR`       | `output_json_files` | folder with one JSON file per patient                          |
+| `INPUT_DIR`       | `output_json_files` | folder with one file per patient, searched recursively (below) |
 | `RATE_HZ`         | `1`                 | `fixed-rate`: records per patient per second                   |
 | `KAFKA_BOOTSTRAP` | `kafka:29092`       | Kafka bootstrap servers                                        |
 | `REPLAY_MODE`     | `fixed-rate`        | `fixed-rate` or `original-timing` (uses `measured_at`)         |
 | `SPEEDUP`         | `1`                 | `original-timing`: time acceleration factor                    |
 | `LOOP`            | `1`                 | `0`: stop after the last record instead of starting over       |
+| `RESCAN_SECONDS`  | `0`                 | `> 0`: look for new patient files every N seconds (0 = off)    |
+| `STATS_SECONDS`   | `10`                | interval of the throughput log line                            |
 | `LOG_MESSAGES`    | `0`                 | `1`: log every sent record                                     |
 
+Input files: `*.json` (JSON array, the format of `generateData.py`/`convert_dwc.py`),
+`*.jsonl` (JSON Lines, one record per line) and `*.jsonl.gz`; sub-folders (e.g. one per unit)
+are scanned recursively. Hidden files, files with `manifest` in their name and other extensions
+(e.g. `*.part`) are ignored. JSON Lines files are streamed line by line (one open reader per
+patient), so the data set may be much larger than the memory; a `*.json` array is loaded one
+file at a time per patient.
+
 In `fixed-rate` mode every patient cycles through its own file independently,
-so patient files may have different lengths.
+so patient files may have different lengths. Records are sent keyed by `userid`
+(all records of a patient go to the same partition, in order) and the Kafka
+record timestamp equals the added `timestamp` field. The producer batches and
+compresses (lz4) and logs only aggregates, e.g.
+`throughput 240.0 msg/s | sent 52800 | failed 0 | active patients 240/240 | behind schedule 0.00 s`
+(record contents and file names are logged only with `LOG_MESSAGES=1`).
 
 #### Synthetic data
 `load-generator/generateData.py` creates the synthetic patient files (random values only):

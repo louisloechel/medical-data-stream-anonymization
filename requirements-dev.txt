@@ -1,0 +1,4 @@
+# Test dependencies for the Python parts: `pip install -r requirements-dev.txt && pytest`
+# (run from the repository root). The unit tests need neither Kafka nor a Kafka
+# client library.
+pytest>=7
