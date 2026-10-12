@@ -40,7 +40,14 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_LOG_RETENTION_HOURS: 6
+      # Disk safety: a partition is trimmed when it exceeds the age OR the size
+      # limit (whichever comes first); old data is deleted in whole segments.
+      # Worst-case disk use ~ topics x partitions x (RETENTION_BYTES + SEGMENT_BYTES),
+      # see README "Scaling to an ICU workload".
+      KAFKA_LOG_RETENTION_HOURS: ${KAFKA_LOG_RETENTION_HOURS:-6}
+      KAFKA_LOG_RETENTION_BYTES: ${KAFKA_LOG_RETENTION_BYTES:-3221225472}  # per partition, 3 GiB
+      KAFKA_LOG_SEGMENT_BYTES: ${KAFKA_LOG_SEGMENT_BYTES:-268435456}      # 256 MiB
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 60000
       KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xms512m -Xmx512m}
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1"]
