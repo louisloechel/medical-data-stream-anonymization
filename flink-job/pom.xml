@@ -7,25 +7,39 @@
     <version>1.0-SNAPSHOT</version>
 
     <properties>
-        <flink.version>1.14.0</flink.version>
+        <!-- Must match the cluster version (flink:1.19 image in docker-compose.yml). -->
+        <flink.version>1.19.3</flink.version>
+        <!-- Externalized Kafka connector built for Flink 1.19. Older connectors break the
+             TaskManager's Prometheus endpoint on 1.19 (KafkaMetricWrapper ClassCastException). -->
+        <flink.kafka.connector.version>3.3.0-1.19</flink.kafka.connector.version>
         <java.version>11</java.version>
     </properties>
 
     <dependencies>
+        <!-- Flink core APIs are provided by the cluster and must not be bundled. -->
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-java</artifactId>
             <version>${flink.version}</version>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.flink</groupId>
-            <artifactId>flink-streaming-java_2.12</artifactId>
+            <artifactId>flink-streaming-java</artifactId>
             <version>${flink.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Logging API is provided by the Flink distribution (lib/log4j-slf4j-impl). -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.36</version>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.flink</groupId>
-            <artifactId>flink-connector-kafka_2.12</artifactId>
-            <version>${flink.version}</version>
+            <artifactId>flink-connector-kafka</artifactId>
+            <version>${flink.kafka.connector.version}</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
@@ -54,11 +68,12 @@
             <version>0.11.0</version>
         </dependency>
 
-        <!-- Flink Prometheus reporter -->
+        <!-- Flink Prometheus reporter (the cluster loads it from plugins/metrics-prometheus) -->
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-metrics-prometheus</artifactId>
             <version>${flink.version}</version>
+            <scope>provided</scope>
         </dependency>
     </dependencies>
 

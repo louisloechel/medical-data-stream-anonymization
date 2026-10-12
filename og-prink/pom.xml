@@ -30,7 +30,12 @@ under the License.
 
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-		<flink.version>1.15.0</flink.version>
+		<!-- Must match the cluster version (flink:1.19 image in docker-compose.yml). -->
+		<flink.version>1.19.3</flink.version>
+		<!-- Externalized Kafka connector built for Flink 1.19. Older connectors (bundled up
+		     to Flink 1.17) break the TaskManager's Prometheus endpoint on 1.19 because their
+		     KafkaMetricWrapper casts non-Double Kafka metrics to Double. -->
+		<flink.kafka.connector.version>3.3.0-1.19</flink.kafka.connector.version>
 		<target.java.version>1.8</target.java.version>
 		<scala.binary.version>2.12</scala.binary.version>
 		<maven.compiler.source>${target.java.version}</maven.compiler.source>
@@ -38,19 +43,6 @@ under the License.
 		<log4j.version>2.17.1</log4j.version>
 	</properties>
 
-	<repositories>
-		<repository>
-			<id>apache.snapshots</id>
-			<name>Apache Development Snapshot Repository</name>
-			<url>https://repository.apache.org/content/repositories/snapshots/</url>
-			<releases>
-				<enabled>false</enabled>
-			</releases>
-			<snapshots>
-				<enabled>true</enabled>
-			</snapshots>
-		</repository>
-	</repositories>
 
 	<dependencies>
 		<dependency>
@@ -87,7 +79,7 @@ under the License.
 		<dependency>
 			<groupId>org.apache.flink</groupId>
 			<artifactId>flink-connector-kafka</artifactId>
-			<version>${flink.version}</version>
+			<version>${flink.kafka.connector.version}</version>
 		</dependency>
 
 		<dependency>
@@ -126,7 +118,7 @@ under the License.
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
 			<artifactId>junit-jupiter</artifactId>
-			<version>RELEASE</version>
+			<version>5.10.2</version>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
@@ -134,16 +126,12 @@ under the License.
 			<artifactId>jmh-core</artifactId>
 			<version>1.35</version>
 		</dependency>
+		<!-- Released version instead of 1.16-SNAPSHOT (snapshots are not reproducible
+		     and the unused flink-table-test-utils pulled a 36 MB snapshot jar). -->
 		<dependency>
 			<groupId>org.apache.flink</groupId>
 			<artifactId>flink-test-utils</artifactId>
-			<version>1.16-SNAPSHOT</version>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.apache.flink</groupId>
-			<artifactId>flink-table-test-utils</artifactId>
-			<version>1.16-SNAPSHOT</version>
+			<version>${flink.version}</version>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
