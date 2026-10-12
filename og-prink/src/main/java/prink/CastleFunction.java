@@ -99,6 +99,13 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
      * 1 = every quasi-identifier gets replaced with <code>null</code>;
      * 2 = quasi-identifiers are generalized with max generalization values*/
     private int suppressStrategy = 2;
+    /** Number of rules (one per tuple position) that have to be received before data tuples are processed.
+     * 0 = process tuples as soon as any rule is present (behaviour of the constructors without rule list) */
+    private int expectedRuleCount = 0;
+    /** Tuple positions for which a rule has been received through the broadcast stream */
+    private transient Set<Integer> receivedRulePositions;
+    /** Data tuples that arrived before the complete rule set (the broadcast and the data stream are not ordered) */
+    private transient List<INPUT> pendingTuples;
 
     /**
      * The core function of the PRINK Castle implementation
@@ -141,6 +148,9 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
         this.suppressStrategy = suppressStrategy;
 
         this.rules = rules.toArray(new CastleRule[0]);
+        // 'rules' is transient and therefore lost when the function is shipped to the cluster; the rules arrive
+        // again through the broadcast stream. Tuples are buffered until all of them have been received.
+        this.expectedRuleCount = this.rules.length;
 
         // Redefine sensible attribute positions
         ArrayList<Integer> newPos = new ArrayList<>();
@@ -188,6 +198,26 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
         }
         posSensibleAttributes = newPos.stream().mapToInt(i -> i).toArray();
 
+        receivedRulePositions().add(rule.getPosition());
+        if(rulesComplete() && pendingTuples != null && !pendingTuples.isEmpty()){
+            LOG.info("Complete rule set received, processing {} buffered tuples", pendingTuples.size());
+            List<INPUT> buffered = pendingTuples;
+            pendingTuples = null;
+            for(INPUT tuple: buffered) processTuple(tuple, collector);
+        }
+    }
+
+    private Set<Integer> receivedRulePositions() {
+        if(receivedRulePositions == null) receivedRulePositions = new HashSet<>();
+        return receivedRulePositions;
+    }
+
+    /**
+     * @return true if data tuples can be processed: rules are present and, if the expected rule count is known,
+     * a rule for every tuple position has been received (prevents clustering with an incomplete rule set)
+     */
+    private boolean rulesComplete() {
+        return rules != null && receivedRulePositions().size() >= expectedRuleCount;
     }
 
     @Override
@@ -200,8 +230,18 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
 
         eventTimeLag.update(ts.currentProcessingTime() - ts.currentWatermark());
 
-        // Do not process any tuples without a rule set to follow
-        if(rules == null) return;
+        // Do not process any tuples without a (complete) rule set to follow
+        if(!rulesComplete()){
+            if(expectedRuleCount > 0){
+                if(pendingTuples == null) pendingTuples = new ArrayList<>();
+                pendingTuples.add(tuple);
+            }
+            return;
+        }
+        processTuple(tuple, output);
+    }
+
+    private void processTuple(INPUT tuple, Collector<OUTPUT> output) {
 
         Cluster bestCluster = bestSelection(tuple);
         if(bestCluster == null){
@@ -976,6 +1016,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
             bigGamma = entry.f0;
             globalTuples = entry.f1;
             rules = entry.f2;
+            if(rules != null) for(int i = 0; i < rules.length; i++) receivedRulePositions().add(i);
             posSensibleAttributes = entry.f3;
         }
     }

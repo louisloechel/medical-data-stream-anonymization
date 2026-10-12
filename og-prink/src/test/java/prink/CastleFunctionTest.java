@@ -12,6 +12,7 @@ import org.apache.flink.api.java.tuple.Tuple4;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.KeyedBroadcastOperatorTestHarness;
 import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
+import org.apache.flink.util.InstantiationUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -565,6 +566,48 @@ public class CastleFunctionTest {
             }
 
             assertTrue(harness.extractOutputStreamRecords().size() >= 2 * k);
+        }
+    }
+
+    /**
+     * The rule broadcast stream and the data stream are not ordered. When the rule list is passed to the
+     * constructor, tuples that arrive before all rules have been broadcast are buffered (not dropped and not
+     * clustered with an incomplete rule set) and processed once the rule set is complete.
+     */
+    @Test
+    public void testTuplesBeforeRulesAreBuffered() throws Exception {
+        int k = 2;
+        int l = 0;
+        int delta = 5;
+        List<CastleRule> rules = Arrays.asList(
+                new CastleRule(0, new NoneGeneralizer(), false),
+                new CastleRule(1, new AggregationFloatGeneralizer(Tuple2.of(0f, 100f)), false),
+                new CastleRule(2, new NoneGeneralizer(), false));
+
+        // Serialize/deserialize the function like Flink does when shipping it to a task manager:
+        // the (transient) rule list passed to the constructor is lost and has to arrive via the broadcast stream
+        CastleFunction<String, Tuple3<String, Float, Integer>, Tuple3<Object, Object, Object>> castleFunction =
+                InstantiationUtil.clone(new CastleFunction<>(0, k, l, delta, 50, 10, 10, false, 2, rules));
+
+        try (KeyedBroadcastOperatorTestHarness<String, Tuple3<String, Float, Integer>, CastleRule, Tuple3<Object, Object, Object>> harness =
+                     ProcessFunctionTestHarnesses.forKeyedBroadcastProcessFunction(castleFunction, tuple -> tuple.getField(0), Types.STRING, ruleStateDescriptor)) {
+
+            for (int i = 0; i < 4; i++) {
+                harness.processElement(new StreamRecord<>(Tuple3.of("p" + i, (float) i, i), i));
+            }
+            harness.processBroadcastElement(rules.get(0), 0);
+            harness.processBroadcastElement(rules.get(1), 0);
+            assertEquals(0, harness.extractOutputStreamRecords().size(), "nothing is released with an incomplete rule set");
+            harness.processBroadcastElement(rules.get(2), 0);
+
+            for (int i = 4; i < 8; i++) {
+                harness.processElement(new StreamRecord<>(Tuple3.of("p" + i, (float) i, i), i));
+            }
+            // 8 tuples, delta 5 -> the first tuples are released; none of the buffered ones got lost
+            assertTrue(harness.extractOutputStreamRecords().size() >= 8 - delta);
+            for (StreamRecord<? extends Tuple3<Object, Object, Object>> record : harness.extractOutputStreamRecords()) {
+                assertTrue(record.getValue().f1 instanceof Tuple2, "attribute 1 is generalized with the broadcast rule");
+            }
         }
     }
 }
