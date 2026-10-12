@@ -1,0 +1,28 @@
+# ECG rhythm domain generalization hierarchy, used by the NonNumericalGeneralizer (generalizer: hierarchy).
+# Leaves are the standard rhythm labels of Philips patient monitors (German UI), as delivered in the field
+# `rhythm`. They are product labels, not patient data.
+# Levels: rhythm group -> rhythm class -> monitor label. Use root "Rhythm" in the profile.
+# Labels that are not part of the hierarchy are attached directly below the root.
+name: rhythm
+paths:
+  - ["Supraventricular", "Sinus", "Sinus-Rhythmus"]
+  - ["Supraventricular", "Sinus", "Sinus-Tachykardie"]
+  - ["Supraventricular", "Sinus", "Sinus-Bradykardie"]
+  - ["Supraventricular", "Atrial fibrillation or irregular", "Afib Rhythmus"]
+  - ["Supraventricular", "Atrial fibrillation or irregular", "HF unregelmäßig"]
+  - ["Supraventricular", "Other SV", "SV-Rhythmus"]
+  - ["Supraventricular", "Other SV", "SV-Tachykardie"]
+  - ["Supraventricular", "Other SV", "SV-Bradykardie"]
+  - ["Ventricular", "Ventricular ectopy pattern", "Bigeminus"]
+  - ["Ventricular", "Ventricular ectopy pattern", "Trigeminus"]
+  - ["Ventricular", "Ventricular ectopy pattern", "Vent-Rhythmus"]
+  - ["Life-threatening", "VF or VT", "Vent Fib/Tachy"]
+  - ["Life-threatening", "VF or VT", "Vent-Tachykardie"]
+  - ["Life-threatening", "VF or VT", "Persistierende VT"]
+  - ["Life-threatening", "Arrest", "Asystolie"]
+  - ["Paced", "Paced", "Pacer-Rhythmus"]
+  - ["Not analysable", "Unknown", "-?-"]
+  - ["Not analysable", "Unknown", "Rhythmus unbekannt"]
+  - ["Not analysable", "No analysis", "Keine EKG-Analyse"]
+  - ["Not analysable", "Learning", "EKG Lernphase"]
+  - ["Not analysable", "Learning", "Rhythmus Lernphase"]

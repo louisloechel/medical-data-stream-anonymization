@@ -18,6 +18,52 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ReductionGeneralizerTest {
 
+    private static Cluster cluster(String... values) {
+        CastleRule[] rules = {
+                new CastleRule(0, new NoneGeneralizer(), false),
+                new CastleRule(1, new ReductionGeneralizer(), false),
+        };
+        Cluster cluster = new Cluster(rules, 0, false);
+        for (int i = 0; i < values.length; i++) cluster.addEntry(Tuple2.of("p" + i, values[i]));
+        return cluster;
+    }
+
+    private static Object reduced(String... values) {
+        return cluster(values).generalize(Tuple2.of("p0", values[0])).getField(1);
+    }
+
+    @Test
+    void equalValuesAreReleasedUnchanged() {
+        assertEquals("J96.11", reduced("J96.11", "J96.11"));
+    }
+
+    @Test
+    void trailingCharactersAreReplacedUntilAllValuesAreEqual() {
+        assertEquals("J96.1*", reduced("J96.11", "J96.10"));
+        assertEquals("J96.**", reduced("J96.11", "J96.01"));
+        assertEquals("J9****", reduced("J96.11", "J90.00"));
+        assertEquals("1*", reduced("10", "12"));
+        assertEquals("**", reduced("10", "22"));
+    }
+
+    @Test
+    void valuesOfDifferentLengthAreReplacedCompletely() {
+        // right-aligned replacement: J96.0 never shares a prefix pattern with J96.11 below full length
+        assertEquals("******", reduced("J96.11", "J96.0"));
+        assertEquals("*****", reduced("J96.0", "I10"));
+    }
+
+    @Test
+    void missingValues() {
+        assertEquals("******", reduced("J96.11", null));
+        assertNull(reduced(null, null), "a cluster without any value releases null");
+    }
+
+    @Test
+    void generalizeMaxIsSingleStar() {
+        assertEquals(Tuple2.of("*", 1.0f), new ReductionGeneralizer().generalizeMax());
+    }
+
     // FIXME rework tests with new Generalizer Structure
 //    Cluster baseCluster;
 //    ReductionGeneralizer subject;

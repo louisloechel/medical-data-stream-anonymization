@@ -42,7 +42,7 @@ class ProfileLoaderTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"thesis-default", "vitals-sensitive", "news2-only", "qi-demographics"})
+    @ValueSource(strings = {"thesis-default", "vitals-sensitive", "news2-only", "qi-demographics", "icu-qi-v2"})
     void bundledProfilesLoadAndValidate(String name) throws IOException {
         AnonymizationProfile profile = load("--profile", name);
         assertEquals(name, profile.name);
@@ -51,6 +51,89 @@ class ProfileLoaderTest {
         assertEquals(profile.inputArity(), profile.buildRules().size());
         // every bundled profile writes to its own topic
         assertTrue(profile.kafka.outputTopic.startsWith("prink-"));
+    }
+
+    private static FieldSpec field(AnonymizationProfile profile, String name) {
+        return profile.fields.stream().filter(f -> f.name.equals(name)).findFirst()
+                .orElseThrow(() -> new AssertionError("field " + name + " missing"));
+    }
+
+    @Test
+    void icuQiV2ProfileLoads() throws IOException {
+        AnonymizationProfile profile = ProfileLoader.load(ParameterTool.fromArgs(new String[]{"--profile", "icu-qi-v2"}),
+                name -> "PRINK_MASK_SALT".equals(name) ? "test-salt" : null);
+        assertEquals(5, profile.privacy.k);
+        assertEquals(2, profile.privacy.l);
+        assertEquals(125, profile.privacy.delta);
+        assertEquals("prink-icu-qi-v2", profile.kafka.outputTopic);
+        assertEquals(17, profile.inputArity());
+        assertEquals(18, profile.outputArity());
+
+        assertEquals(Arrays.asList("recordid", "userid", "caseid", "ageBand", "sex", "postcode2", "ward", "icd10",
+                        "resp", "spo2", "bps", "pulse", "temp", "rhythm", "o2", "news2Total", "timestamp", "infoloss"),
+                Arrays.asList(profile.outputNames()));
+
+        for (String qi : new String[]{"ageBand", "sex", "postcode2", "ward", "icd10"}) {
+            assertEquals(FieldSpec.Role.QUASI_IDENTIFIER, field(profile, qi).role, qi);
+        }
+        for (String s : new String[]{"resp", "spo2", "bps", "pulse", "temp", "rhythm", "o2", "news2Total"}) {
+            assertEquals(FieldSpec.Role.SENSITIVE, field(profile, s).role, s);
+        }
+        assertEquals(FieldSpec.GeneralizerType.REDUCTION, field(profile, "icd10").generalizer);
+        assertEquals(FieldSpec.GeneralizerType.REDUCTION, field(profile, "ward").generalizer);
+        assertEquals(FieldSpec.GeneralizerType.REDUCTION, field(profile, "postcode2").generalizer);
+        assertEquals(FieldSpec.FieldType.INT, field(profile, "o2").type);
+        assertEquals("test-salt", field(profile, "userid").mask.salt);
+        assertEquals("test-salt", field(profile, "caseid").mask.salt);
+        assertEquals(FieldSpec.Role.DROP, field(profile, "username").role);
+        assertEquals(FieldSpec.Role.DROP, field(profile, "measured_at").role);
+
+        // hierarchy files are inlined
+        FieldSpec.HierarchySpec age = field(profile, "ageBand").hierarchy;
+        assertNull(age.file);
+        assertEquals("*", age.root);
+        assertEquals(11, age.paths.size());
+        assertEquals(Arrays.asList("80+", "100+"), age.paths.get(age.paths.size() - 1));
+        FieldSpec.HierarchySpec rhythm = field(profile, "rhythm").hierarchy;
+        assertEquals("Rhythm", rhythm.root);
+        assertEquals(21, rhythm.paths.size());
+        assertTrue(rhythm.paths.contains(Arrays.asList("Supraventricular", "Atrial fibrillation or irregular", "HF unregelmäßig")));
+        assertTrue(rhythm.paths.contains(Arrays.asList("Not analysable", "Unknown", "-?-")));
+        for (List<String> path : rhythm.paths) assertEquals(3, path.size(), path.toString());
+    }
+
+    /** Generalization of the bundled age band and rhythm hierarchies through the hierarchy generalizer. */
+    @Test
+    void icuQiV2Hierarchies() throws IOException {
+        AnonymizationProfile profile = load("--profile", "icu-qi-v2");
+        assertEquals("60-69", generalizeHierarchy(field(profile, "ageBand"), "60-69", "60-69"));
+        assertEquals("60-79", generalizeHierarchy(field(profile, "ageBand"), "60-69", "70-79"));
+        assertEquals("80+", generalizeHierarchy(field(profile, "ageBand"), "90-99", "100+"));
+        assertEquals("*", generalizeHierarchy(field(profile, "ageBand"), "50-59", "60-69"));
+        assertEquals("*", generalizeHierarchy(field(profile, "sex"), "M", "F"));
+        assertEquals("F", generalizeHierarchy(field(profile, "sex"), "F", "F"));
+
+        FieldSpec rhythm = field(profile, "rhythm");
+        assertEquals("Sinus-Rhythmus", generalizeHierarchy(rhythm, "Sinus-Rhythmus", "Sinus-Rhythmus"));
+        assertEquals("Sinus", generalizeHierarchy(rhythm, "Sinus-Rhythmus", "Sinus-Tachykardie"));
+        assertEquals("Supraventricular", generalizeHierarchy(rhythm, "Sinus-Rhythmus", "Afib Rhythmus"));
+        assertEquals("Atrial fibrillation or irregular", generalizeHierarchy(rhythm, "Afib Rhythmus", "HF unregelmäßig"));
+        assertEquals("VF or VT", generalizeHierarchy(rhythm, "Vent Fib/Tachy", "Persistierende VT"));
+        assertEquals("Life-threatening", generalizeHierarchy(rhythm, "Asystolie", "Vent-Tachykardie"));
+        assertEquals("Pacer-Rhythmus", generalizeHierarchy(rhythm, "Pacer-Rhythmus", "Pacer-Rhythmus"));
+        assertEquals("Not analysable", generalizeHierarchy(rhythm, "-?-", "EKG Lernphase"));
+        assertEquals("Rhythm", generalizeHierarchy(rhythm, "Sinus-Rhythmus", "Asystolie"));
+        assertEquals("Rhythm", generalizeHierarchy(rhythm, "Sinus-Rhythmus", null));
+    }
+
+    private static Object generalizeHierarchy(FieldSpec field, String... values) {
+        CastleRule[] rules = {
+                new CastleRule(0, new NoneGeneralizer(), false),
+                new CastleRule(1, AnonymizationProfile.buildGeneralizer(field), false),
+        };
+        prink.datatypes.Cluster cluster = new prink.datatypes.Cluster(rules, 0, false);
+        for (int i = 0; i < values.length; i++) cluster.addEntry(Tuple2.of("p" + i, values[i]));
+        return cluster.generalize(Tuple2.of("p0", values[0])).getField(1);
     }
 
     @Test

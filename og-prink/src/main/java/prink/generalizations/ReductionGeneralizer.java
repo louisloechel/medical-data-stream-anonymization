@@ -26,7 +26,12 @@ public class ReductionGeneralizer implements BaseGeneralizer{
      * Examples with replacerChar '*': <br>
      *      [Cat, Car, Can] -> [Ca*, Ca*, Ca*] <br>
      *      [Cat, Car, Cow] -> [C**, C**, C**] <br>
-     *      [543, 521, 576] -> [5**, 5**, 5**]
+     *      [543, 521, 576] -> [5**, 5**, 5**] <br>
+     * The values are compared right-aligned to their own length: in step i the last i characters of every value are
+     * replaced. Values of different length therefore only become equal once they are replaced completely
+     * (ICD-10: [J96.11, J96.10] -> J96.1*, but [J96.11, J96.0] -> ******). Missing values (<code>null</code>) are
+     * treated as empty strings, so a missing value next to present ones also leads to complete replacement; a cluster
+     * that contains only missing values releases <code>null</code>.
      * @param replacerChar the char that is used to replace the original values. Default: '*'
      */
     public ReductionGeneralizer(char replacerChar){
@@ -90,6 +95,8 @@ public class ReductionGeneralizer implements BaseGeneralizer{
         }
 
         int maxLength = Stream.of(ids).map(String::length).max(Integer::compareTo).get();
+        // All values inside the cluster are missing: release null instead of an empty string
+        if(maxLength == 0 && allMissing(entries, withTuples)) return Tuple2.of(null, 0f);
 
         // count number of redacted chars to calculate a information loss value. Start at -1 to check if nothing needs to be reducted (i=0)
         float numRedacted = -1;
@@ -106,6 +113,18 @@ public class ReductionGeneralizer implements BaseGeneralizer{
         }
         float infoLoss = (numRedacted > 0) ? (numRedacted/maxLength) : 0f ;
         return Tuple2.of(ids[0], infoLoss);
+    }
+
+    private boolean allMissing(List<Tuple> entries, List<Tuple> withTuples) {
+        for (Tuple entry : entries) {
+            if (entry.getField(position) != null) return false;
+        }
+        if (withTuples != null) {
+            for (Tuple entry : withTuples) {
+                if (entry.getField(position) != null) return false;
+            }
+        }
+        return true;
     }
 
     @Override

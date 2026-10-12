@@ -63,16 +63,34 @@ public class KafkaFlinkJob {
         env.execute("Kafka Flink Job");
     }
 
-    /** Fields copied unchanged from raw-topic to processed-topic (if present). */
-    private static final String[] PASS_THROUGH = {
-            "userid", "caseid", "username", "userinitials", "ward"
+    /**
+     * Fields that are always present in a processed-topic record (JSON null if
+     * the raw record lacks them), so downstream consumers and Prink profiles
+     * see a stable minimum schema. All other input fields are passed through
+     * only if present.
+     */
+    private static final String[] ALWAYS_PRESENT = {
+            "recordid", "userid", "caseid", "username", "userinitials", "ward",
+            "resp", "bps", "pulse", "spo2", "temp", "icd10", "timestamp"
     };
 
     /**
      * Parses one raw-topic record and returns the processed-topic record, or
      * null if the record cannot be used (invalid JSON or no userid).
-     * Missing or null vital signs yield a null sub-score; news2Partial is the
-     * sum of the available sub-scores and news2Components their number.
+     *
+     * <p>The output is a pass-through of the input object: every input field
+     * is copied unchanged (so new optional fields reach processed-topic
+     * without code changes), then the computed NEWS2 fields are added,
+     * overwriting input fields of the same name. {@code recordid} is
+     * normalized to a string.
+     *
+     * <p>NEWS2 inputs: resp, spo2 (+ spo2Scale, default 1, and o2 for
+     * scale 2), o2 (boolean: supplemental oxygen or ventilation), bps, pulse,
+     * acvpu ("A", "C", "V", "P", "U") and temp. Missing, null or invalid
+     * inputs yield a null sub-score (never an extreme score). news2Partial is
+     * the sum of the available sub-scores and news2Components their number
+     * (0-7); news2Complete tells whether all seven are available and
+     * news2Total is the NEWS2 total if so (JSON null otherwise).
      */
     static String process(ObjectMapper objectMapper, String value) {
         JsonNode in;
@@ -87,34 +105,37 @@ public class KafkaFlinkJob {
             return null;
         }
 
+        Boolean onOxygen = bool(in, "o2");
         Integer respScore = News2.respScore(numeric(in, "resp"));
+        Integer spo2Score = News2.spo2Score(numeric(in, "spo2"), spo2Scale(in), onOxygen);
+        Integer o2Score = News2.o2Score(onOxygen);
         Integer bpsScore = News2.systolicScore(numeric(in, "bps"));
         Integer pulseScore = News2.pulseScore(numeric(in, "pulse"));
-        Integer spo2Score = News2.spo2Score(numeric(in, "spo2"));
+        Integer consciousnessScore = News2.consciousnessScore(text(in, "acvpu"));
         Integer tempScore = News2.tempScore(numeric(in, "temp"));
+        Integer[] scores = {respScore, spo2Score, o2Score, bpsScore, pulseScore, consciousnessScore, tempScore};
 
-        ObjectNode out = objectMapper.createObjectNode();
+        // pass-through: copy all input fields (in input order)
+        ObjectNode out = ((ObjectNode) in).deepCopy();
+        for (String field : ALWAYS_PRESENT) {
+            if (!out.has(field)) {
+                out.putNull(field);
+            }
+        }
         out.put("recordid", hasValue(in, "recordid") ? in.get("recordid").asText() : null);
-        for (String field : PASS_THROUGH) {
-            copy(in, out, field);
-        }
-        copy(in, out, "resp");
+
+        // computed fields (overwrite input fields of the same name)
         out.put("respNEWS", respScore);
-        copy(in, out, "bps");
-        out.put("bpsNEWS", bpsScore);
-        copy(in, out, "pulse");
-        out.put("pulseNEWS", pulseScore);
-        copy(in, out, "spo2");
         out.put("spo2NEWS", spo2Score);
-        copy(in, out, "temp");
+        out.put("o2NEWS", o2Score);
+        out.put("bpsNEWS", bpsScore);
+        out.put("pulseNEWS", pulseScore);
+        out.put("consciousnessNEWS", consciousnessScore);
         out.put("tempNEWS", tempScore);
-        out.put("news2Partial", News2.partialSum(respScore, bpsScore, pulseScore, spo2Score, tempScore));
-        out.put("news2Components", News2.components(respScore, bpsScore, pulseScore, spo2Score, tempScore));
-        copy(in, out, "icd10");
-        if (in.has("measured_at")) {
-            copy(in, out, "measured_at");
-        }
-        copy(in, out, "timestamp");
+        out.put("news2Partial", News2.partialSum(scores));
+        out.put("news2Components", News2.components(scores));
+        out.put("news2Complete", News2.complete(scores));
+        out.put("news2Total", News2.total(scores));
         return out.toString();
     }
 
@@ -123,13 +144,54 @@ public class KafkaFlinkJob {
         return v != null && !v.isNull();
     }
 
-    private static void copy(JsonNode in, ObjectNode out, String field) {
-        JsonNode v = in.get(field);
-        if (v == null) {
-            out.putNull(field);
-        } else {
-            out.set(field, v);
+    /**
+     * SpO2 scale of the record: 1 if the field is missing or null, the
+     * integer value if it is a number or numeric string, otherwise -1
+     * (unknown scale, the SpO2 sub-score becomes null).
+     */
+    static Integer spo2Scale(JsonNode node) {
+        JsonNode v = node.get("spo2Scale");
+        if (v == null || v.isNull()) {
+            return News2.SPO2_SCALE_1;
         }
+        Double d = numeric(node, "spo2Scale");
+        if (d == null || d != Math.rint(d)) {
+            return -1;
+        }
+        return d.intValue();
+    }
+
+    /**
+     * Boolean value of a field: JSON true/false, the numbers 1/0 or the
+     * strings "true"/"false"/"1"/"0" (case-insensitive); otherwise null.
+     */
+    static Boolean bool(JsonNode node, String field) {
+        JsonNode v = node.get(field);
+        if (v == null || v.isNull()) {
+            return null;
+        }
+        if (v.isBoolean()) {
+            return v.booleanValue();
+        }
+        String t = v.isNumber() ? v.numberValue().toString() : v.isTextual() ? v.asText().trim().toLowerCase(java.util.Locale.ROOT) : "";
+        switch (t) {
+            case "true":
+            case "1":
+            case "1.0":
+                return Boolean.TRUE;
+            case "false":
+            case "0":
+            case "0.0":
+                return Boolean.FALSE;
+            default:
+                return null;
+        }
+    }
+
+    /** Text value of a string field, or null. */
+    static String text(JsonNode node, String field) {
+        JsonNode v = node.get(field);
+        return v != null && v.isTextual() ? v.asText() : null;
     }
 
     /** Numeric value of a field (number or numeric string), or null. */

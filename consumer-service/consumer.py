@@ -2,6 +2,7 @@ from confluent_kafka import Consumer, KafkaError, KafkaException # type: ignore
 from prometheus_client import start_http_server, Counter, Gauge, Info # type: ignore
 import json
 import os
+import re
 import time
 import numpy as np
 from statsmodels.tsa.holtwinters import SimpleExpSmoothing
@@ -156,18 +157,46 @@ def train_and_predict(message, topic):
 
 def process_value(value):
     # Prink generalises values to strings such as "(123,456)"; numbers and
-    # None (missing measurement) are passed through unchanged.
+    # None (missing measurement) are passed through unchanged. Other strings
+    # (generalized categories such as "Supraventricular", "60-79", "J96.1*")
+    # are returned unchanged.
     if not isinstance(value, str):
         return value
     # if value is empty string, skip
     if value == '':
         return None
-    elif value[0] == '(':
+    elif value[0] == '(' and value.endswith(')'):
         # value is tuple, (123,456), rm '()', split by ',' and calculate rounded avg
-        value = value[1:-1]
-        value_avg = (float(value.split(',')[0]) + float(value.split(',')[1])) / 2
+        parts = value[1:-1].split(',')
+        try:
+            value_avg = (float(parts[0]) + float(parts[1])) / 2
+        except (IndexError, ValueError):
+            return value
         value = round(value_avg, 0)
     return value
+
+# Fields that are never exported as a numeric gauge although their value may
+# look numeric: quasi-identifiers / categories of the ICU record schema v2.
+NON_METRIC_FIELDS = {'postcode2'}
+
+def metric_name(key):
+    """Prometheus-safe gauge name for a JSON key, or None if unusable."""
+    if not isinstance(key, str) or not key:
+        return None
+    return 'kafka_consumer_' + re.sub(r'[^a-zA-Z0-9_]', '_', key)
+
+def gauge_for(key):
+    """Per-field gauge, created on first use; None if it cannot be created."""
+    if key not in gauges:
+        name = metric_name(key)
+        if name is None:
+            return None
+        try:
+            gauges[key] = Gauge(name, f'Kafka consumer {key} value', ['userid', 'topic', 'icd10'])
+        except ValueError as e:  # e.g. name clash after sanitising
+            print(f"Cannot export field {key!r} as metric: {e}", flush=True)
+            gauges[key] = None
+    return gauges[key]
 
 def parse_timestamp(value):
     """Parse the producer's send timestamp (ISO-8601, e.g.
@@ -199,17 +228,24 @@ def handle_message(message, topic, time_now):
         ICD10_LAST_SEEN.labels(userid=userid, topic=topic, icd10=icd10).set(time_now)
 
         for key, value in message.items():
-            if key not in gauges:
-                gauges[key] = Gauge(f'kafka_consumer_{key}', f'Kafka consumer {key} value', ['userid', 'topic', 'icd10'])
+            if key in NON_METRIC_FIELDS:
+                continue
             if topic == 'prink-topic':
                 processed_value = process_value(value)
                 if processed_value is not None:
                     value = processed_value
+            # numbers and booleans (o2, news2Complete -> 0/1) only; strings,
+            # nulls, lists and objects are skipped
+            if isinstance(value, (dict, list)):
+                continue
             try:
                 value = float(value)
             except (TypeError, ValueError):
                 continue
-            gauges[key].labels(userid=userid, topic=topic, icd10=icd10).set(value)
+            gauge = gauge_for(key)
+            if gauge is None:
+                continue
+            gauge.labels(userid=userid, topic=topic, icd10=icd10).set(value)
 
         if 'correct_bed_registration' not in gauges:
             gauges['correct_bed_registration'] = Gauge('kafka_consumer_correct_bed_registration', 'Kafka consumer correct bed registration', ['userid', 'topic'])

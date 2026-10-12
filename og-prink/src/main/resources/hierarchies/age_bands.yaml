@@ -1,0 +1,19 @@
+# Age band domain generalization hierarchy, used by the NonNumericalGeneralizer (generalizer: hierarchy).
+# Leaves are 10-year bands as delivered in the field `ageBand` ("0-9", "10-19", ..., "90-99", "100+").
+# Generalization steps: 10-year band -> 20-year band -> root (set in the profile, e.g. root: "*").
+# The last 20-year band is open ("80+": 80-89, 90-99, 100+) because node names must be unique in the
+# tree and very old patients are rare (an extra "100+" level would single them out).
+# Values that are not part of the hierarchy (e.g. other band widths) are attached directly below the root.
+name: age_bands
+paths:
+  - ["0-19", "0-9"]
+  - ["0-19", "10-19"]
+  - ["20-39", "20-29"]
+  - ["20-39", "30-39"]
+  - ["40-59", "40-49"]
+  - ["40-59", "50-59"]
+  - ["60-79", "60-69"]
+  - ["60-79", "70-79"]
+  - ["80+", "80-89"]
+  - ["80+", "90-99"]
+  - ["80+", "100+"]
