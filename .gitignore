@@ -5,3 +5,4 @@ grafana/grafana.db
 *.xml
 grafana/plugins/*
 /.vscode
+.env
