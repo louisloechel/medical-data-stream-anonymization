@@ -6,3 +6,4 @@ grafana/grafana.db
 grafana/plugins/*
 /.vscode
 .env
+target/
