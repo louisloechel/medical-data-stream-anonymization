@@ -99,6 +99,13 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
      * 1 = every quasi-identifier gets replaced with <code>null</code>;
      * 2 = quasi-identifiers are generalized with max generalization values*/
     private int suppressStrategy = 2;
+    /** Number of rules (one per tuple position) that have to be received before data tuples are processed.
+     * 0 = process tuples as soon as any rule is present (behaviour of the constructors without rule list) */
+    private int expectedRuleCount = 0;
+    /** Tuple positions for which a rule has been received through the broadcast stream */
+    private transient Set<Integer> receivedRulePositions;
+    /** Data tuples that arrived before the complete rule set (the broadcast and the data stream are not ordered) */
+    private transient List<INPUT> pendingTuples;
 
     /**
      * The core function of the PRINK Castle implementation
@@ -141,6 +148,9 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
         this.suppressStrategy = suppressStrategy;
 
         this.rules = rules.toArray(new CastleRule[0]);
+        // 'rules' is transient and therefore lost when the function is shipped to the cluster; the rules arrive
+        // again through the broadcast stream. Tuples are buffered until all of them have been received.
+        this.expectedRuleCount = this.rules.length;
 
         // Redefine sensible attribute positions
         ArrayList<Integer> newPos = new ArrayList<>();
@@ -188,11 +198,31 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
         }
         posSensibleAttributes = newPos.stream().mapToInt(i -> i).toArray();
 
+        receivedRulePositions().add(rule.getPosition());
+        if(rulesComplete() && pendingTuples != null && !pendingTuples.isEmpty()){
+            LOG.info("Complete rule set received, processing {} buffered tuples", pendingTuples.size());
+            List<INPUT> buffered = pendingTuples;
+            pendingTuples = null;
+            for(INPUT tuple: buffered) processTuple(tuple, collector);
+        }
+    }
+
+    private Set<Integer> receivedRulePositions() {
+        if(receivedRulePositions == null) receivedRulePositions = new HashSet<>();
+        return receivedRulePositions;
+    }
+
+    /**
+     * @return true if data tuples can be processed: rules are present and, if the expected rule count is known,
+     * a rule for every tuple position has been received (prevents clustering with an incomplete rule set)
+     */
+    private boolean rulesComplete() {
+        return rules != null && receivedRulePositions().size() >= expectedRuleCount;
     }
 
     @Override
     public void processElement(INPUT tuple, ReadOnlyContext context, Collector<OUTPUT> output) {
-        LOG.debug("Element received: key: {}", tuple.getField(posTupleId).toString());
+        LOG.debug("Element received: key: {}", (Object) tuple.getField(posTupleId));
 
         TimerService ts = context.timerService();
 
@@ -200,8 +230,18 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
 
         eventTimeLag.update(ts.currentProcessingTime() - ts.currentWatermark());
 
-        // Do not process any tuples without a rule set to follow
-        if(rules == null) return;
+        // Do not process any tuples without a (complete) rule set to follow
+        if(!rulesComplete()){
+            if(expectedRuleCount > 0){
+                if(pendingTuples == null) pendingTuples = new ArrayList<>();
+                pendingTuples.add(tuple);
+            }
+            return;
+        }
+        processTuple(tuple, output);
+    }
+
+    private void processTuple(INPUT tuple, Collector<OUTPUT> output) {
 
         Cluster bestCluster = bestSelection(tuple);
         if(bestCluster == null){
@@ -342,7 +382,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
             for(Tuple tuple: allBigGammaEntries){
                 int pos = posSensibleAttributes[0];
                 // Check for arrays
-                Object sensAttributeValue = tuple.getField(pos).getClass().isArray() ? ((Object[]) tuple.getField(pos))[((Object[]) tuple.getField(pos)).length-1] : tuple.getField(pos);
+                Object sensAttributeValue = Cluster.comparableValue(tuple, pos);
                 output.add(sensAttributeValue);
                 if(output.size() >= l) return true;
             }
@@ -356,7 +396,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
                 if(counter >= l) return true;
                 for (int pos : posSensibleAttributes) {
                     //noinspection ComparatorCombinators - This is apparently slightly more performant then 'Comparator.comparingLong(Map.Entry::getValue)'
-                    Map.Entry<Object, Long> temp = allBigGammaEntries.stream().collect(Collectors.groupingBy(s -> (s.getField(pos).getClass().isArray() ? ((Object[]) s.getField(pos))[((Object[]) s.getField(pos)).length-1] : s.getField(pos)), Collectors.counting()))
+                    Map.Entry<Object, Long> temp = allBigGammaEntries.stream().collect(Collectors.groupingBy(s -> Cluster.comparableValue(s, pos), Collectors.counting()))
                         .entrySet().stream().max((attEntry1, attEntry2) -> Long.compare(attEntry1.getValue(), attEntry2.getValue())).orElse(null);
                     numOfAppearances.add(Tuple2.of(pos, temp));
                 }
@@ -366,7 +406,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
                 ArrayList<Tuple> tuplesToDelete = new ArrayList<>(); // TODO-Later maybe use iterator to delete tuples if performance is better
                 for(Tuple tuple: allBigGammaEntries){
                     // adjust to find also values from arrays
-                    Object toCompare = (tuple.getField(mapEntryToDelete.f0).getClass().isArray() ? ((Object[]) tuple.getField(mapEntryToDelete.f0))[((Object[]) tuple.getField(mapEntryToDelete.f0)).length-1] : tuple.getField(mapEntryToDelete.f0));
+                    Object toCompare = Cluster.comparableValue(tuple, mapEntryToDelete.f0);
                     if(toCompare.equals(mapEntryToDelete.f1.getKey())){
                         tuplesToDelete.add(tuple);
                     }
@@ -508,13 +548,13 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
     private Collection<Cluster> split(Cluster input) {
         // Output cluster. See 'SC' in CASTLE Paper definition
         ArrayList<Cluster> output = new ArrayList<>();
-        HashMap<Long, ArrayList<Tuple>> buckets = generateBuckets(input);
+        HashMap<Object, ArrayList<Tuple>> buckets = generateBuckets(input);
 
         while(buckets.size() >= k){
             // Randomly select a bucket and select one tuple
             int random = new Random().nextInt(buckets.size());
-            List<Long> ids = new ArrayList<>(buckets.keySet());
-            long selectedBucketId = ids.get(random);
+            List<Object> ids = new ArrayList<>(buckets.keySet());
+            Object selectedBucketId = ids.get(random);
             ArrayList<Tuple> selectedBucket = buckets.get(selectedBucketId);
             Tuple selectedTuple = selectedBucket.get(0);
 
@@ -526,15 +566,15 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
             if(selectedBucket.size() <= 0) buckets.remove(selectedBucketId);
 
             // Find buckets with the smallest distance to 'selectedTuple'
-            ArrayList<Tuple2<Long, Float>> distances = new ArrayList<>();
-            for(Map.Entry<Long, ArrayList<Tuple>> bucketEntry : buckets.entrySet()){
+            ArrayList<Tuple2<Object, Float>> distances = new ArrayList<>();
+            for(Map.Entry<Object, ArrayList<Tuple>> bucketEntry : buckets.entrySet()){
                 if(bucketEntry.getValue().equals(selectedBucket)) continue;
                 // Pick one of the tuples and calculate the distance to 'selectedTuple'
                 distances.add(new Tuple2<>(bucketEntry.getKey(), newCluster.enlargementValue(bucketEntry.getValue().get(0))));
             }
             distances.sort(Comparator.comparing(o -> (o.f1)));
 
-            for(Tuple2<Long, Float> entry: distances.subList(0,k-1)){
+            for(Tuple2<Object, Float> entry: distances.subList(0,k-1)){
                 ArrayList<Tuple> bucket = buckets.get(entry.f0);
                 Tuple firstTuple = bucket.get(0);
                 // Shift tuple from bucket into new cluster
@@ -546,7 +586,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
             output.add(newCluster);
         }
 
-        for(Map.Entry<Long, ArrayList<Tuple>> bucketEntry : buckets.entrySet()){
+        for(Map.Entry<Object, ArrayList<Tuple>> bucketEntry : buckets.entrySet()){
             // Find the nearest cluster for remaining buckets
             float nearestDistance = Float.MAX_VALUE;
             Cluster nearestCluster = null;
@@ -757,7 +797,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
             while (oneIdTuples.size() > 0) {
                 for (int pos: posSensibleAttributes) {
                     //noinspection ComparatorCombinators - This is apparently slightly more performant then 'Comparator.comparingLong(Map.Entry::getValue)'
-                    Map.Entry<Object, Long> temp = oneIdTuples.stream().collect(Collectors.groupingBy(s -> (s.getField(pos).getClass().isArray() ? ((Object[]) s.getField(pos))[((Object[]) s.getField(pos)).length-1] : s.getField(pos)), Collectors.counting()))
+                    Map.Entry<Object, Long> temp = oneIdTuples.stream().collect(Collectors.groupingBy(s -> Cluster.comparableValue(s, pos), Collectors.counting()))
                             .entrySet().stream().max((attEntry1, attEntry2) -> Long.compare(attEntry1.getValue(), attEntry2.getValue())).orElse(null);
                     numOfAppearances.add(Tuple2.of(pos, temp));
                 }
@@ -769,7 +809,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
                 output.putIfAbsent(generatedKey, new ArrayList<>());
                 for(Tuple tuple: oneIdTuples){
                     // Adjust to find also values from arrays TODO re-write
-                    Object toCompare = (tuple.getField(mapEntryToDelete.f0).getClass().isArray() ? ((Object[]) tuple.getField(mapEntryToDelete.f0))[((Object[]) tuple.getField(mapEntryToDelete.f0)).length-1] : tuple.getField(mapEntryToDelete.f0));
+                    Object toCompare = Cluster.comparableValue(tuple, mapEntryToDelete.f0);
                     if(toCompare.equals(mapEntryToDelete.f1.getKey())){
                         output.get(generatedKey).add(tuple);
                         tuplesToDelete.add(tuple);
@@ -789,11 +829,12 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
      * @param input Cluster with tuples to create HashMap
      * @return HashMap of all tuples sorted in 'buckets' based on tuple id
      */
-    private HashMap<Long, ArrayList<Tuple>> generateBuckets(Cluster input) {
-        HashMap<Long, ArrayList<Tuple>> output = new HashMap<>();
+    private HashMap<Object, ArrayList<Tuple>> generateBuckets(Cluster input) {
+        HashMap<Object, ArrayList<Tuple>> output = new HashMap<>();
 
         for(Tuple tuple: input.getAllEntries()){
-            long tupleId = tuple.getField(posTupleId);
+            // Ids can be of any type (e.g. String patient numbers), so do not cast to long
+            Object tupleId = tuple.getField(posTupleId);
             output.putIfAbsent(tupleId, new ArrayList<>());
             output.get(tupleId).add(tuple);
         }
@@ -975,6 +1016,7 @@ public class CastleFunction<KEY, INPUT extends Tuple, OUTPUT extends Tuple> exte
             bigGamma = entry.f0;
             globalTuples = entry.f1;
             rules = entry.f2;
+            if(rules != null) for(int i = 0; i < rules.length; i++) receivedRulePositions().add(i);
             posSensibleAttributes = entry.f3;
         }
     }

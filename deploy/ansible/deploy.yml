@@ -1,0 +1,252 @@
+---
+# Deploys the medical-data-stream-anonymization stack (Kafka, Flink, Prink,
+# Prometheus, Grafana) with Docker Compose on a single Ubuntu 22.04/24.04 VM.
+#
+#   ansible-playbook -i <inventory> deploy.yml                  # deploy main
+#   ansible-playbook -i <inventory> deploy.yml -e app_version=fix/local-run
+#
+# See README.md in this directory for details.
+
+- name: Deploy medical data stream anonymization stack
+  hosts: stream_anon
+  become: true
+
+  vars:
+    app_repo: "https://github.com/louisloechel/medical-data-stream-anonymization.git"
+    # Branch, tag or commit SHA to deploy.
+    app_version: main
+    # Repository checkout (code only, no private data).
+    app_dir: /opt/medical-data-stream-anonymization
+    # Private data lives outside the repository checkout.
+    data_dir: /data/stream-anon
+    deploy_user: "{{ ansible_user | default('ubuntu') }}"
+    # Extra compose files (absolute paths on the host), e.g. a private override
+    # stored in {{ data_dir }}/secrets that mounts {{ data_dir }}/input.
+    compose_extra_files: []
+    # "auto": tear the stack down and start it fresh whenever the checked-out
+    # commit or the compose override changes (avoids duplicate Flink jobs and
+    # stale Kafka broker registrations). "always" / "never" force it.
+    compose_clean_restart: auto
+    # Force a rebuild of the images (and a clean restart) without a new commit.
+    compose_rebuild: false
+    # Wait until exactly this many Flink jobs are RUNNING (0 disables the check).
+    flink_expected_running_jobs: 2
+    flink_wait_retries: 60
+    flink_wait_delay: 10
+    # Grafana keeps its runtime state (grafana.db) outside the checkout. It is
+    # seeded once from the repository's grafana/ directory; set
+    # grafana_reset=true to re-seed it from the deployed version.
+    grafana_state_dir: /var/lib/stream-anon/grafana
+    grafana_reset: false
+    grafana_uid: 472
+    # Publish all container ports on 127.0.0.1 only (reach them via SSH
+    # tunnels). docker-compose.yml publishes on 0.0.0.0, and Docker bypasses
+    # host firewalls such as ufw. Requires Docker Compose >= 2.24.4.
+    bind_ports_to_localhost: true
+    # Ansible-managed compose override (not part of the repository).
+    compose_deploy_override: /etc/stream-anon/docker-compose.deploy.yml
+    compose_files: >-
+      {{ [app_dir ~ '/docker-compose.yml', compose_deploy_override] + compose_extra_files }}
+
+  pre_tasks:
+    - name: Check that the target is a supported Ubuntu release
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == "Ubuntu"
+          - ansible_facts['distribution_version'] is version('22.04', '>=')
+        fail_msg: "Only Ubuntu 22.04 / 24.04 are supported (found {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }})."
+
+  tasks:
+    # ------------------------------------------------------------------ Docker
+    - name: Check for an existing Docker Engine with Compose v2
+      ansible.builtin.command: docker compose version
+      register: docker_compose_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install Docker Engine from the official repository
+      when: docker_compose_check.rc != 0
+      block:
+        - name: Install prerequisites
+          ansible.builtin.apt:
+            name: [ca-certificates, curl, python3-debian]
+            state: present
+            update_cache: true
+            cache_valid_time: 3600
+
+        - name: Ensure apt keyring directory exists
+          ansible.builtin.file:
+            path: /etc/apt/keyrings
+            state: directory
+            mode: "0755"
+
+        - name: Download Docker apt key
+          ansible.builtin.get_url:
+            url: https://download.docker.com/linux/ubuntu/gpg
+            dest: /etc/apt/keyrings/docker.asc
+            mode: "0644"
+
+        - name: Add Docker apt repository
+          ansible.builtin.deb822_repository:
+            name: docker
+            types: deb
+            uris: https://download.docker.com/linux/ubuntu
+            suites: "{{ ansible_facts['distribution_release'] }}"
+            components: stable
+            architectures: "{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'amd64' }}"
+            signed_by: /etc/apt/keyrings/docker.asc
+            state: present
+
+        - name: Install Docker packages
+          ansible.builtin.apt:
+            name:
+              - docker-ce
+              - docker-ce-cli
+              - containerd.io
+              - docker-buildx-plugin
+              - docker-compose-plugin
+            state: present
+            update_cache: true
+
+    - name: Ensure Docker is running and enabled
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Allow the deploy user to use Docker
+      ansible.builtin.user:
+        name: "{{ deploy_user }}"
+        groups: docker
+        append: true
+
+    - name: Install git
+      ansible.builtin.apt:
+        name: git
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    # ------------------------------------------------------------ Private data
+    - name: Create private data directories (outside the repository)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0700"
+      loop:
+        - "{{ data_dir }}"
+        - "{{ data_dir }}/input"
+        - "{{ data_dir }}/secrets"
+
+    # -------------------------------------------------------------- Checkout
+    - name: Check out {{ app_version }}
+      ansible.builtin.git:
+        repo: "{{ app_repo }}"
+        dest: "{{ app_dir }}"
+        version: "{{ app_version }}"
+        update: true
+        # The checkout is managed by Ansible only; discard manual edits.
+        force: true
+      register: app_checkout
+
+    # ---------------------------------------------------------------- Grafana
+    # docker-compose.yml bind-mounts ./grafana (incl. the tracked grafana.db) as
+    # Grafana's data dir. On Linux that fails (the container runs as uid 472)
+    # and would dirty the checkout, so a seeded copy outside the repo is used.
+    - name: Check for existing Grafana state
+      ansible.builtin.stat:
+        path: "{{ grafana_state_dir }}/grafana.db"
+      register: grafana_state
+
+    - name: Seed Grafana state from the repository
+      ansible.builtin.copy:
+        src: "{{ app_dir }}/grafana/"
+        dest: "{{ grafana_state_dir }}/"
+        remote_src: true
+        mode: preserve
+      when: not grafana_state.stat.exists or (grafana_reset | bool)
+
+    - name: Make Grafana state writable for the Grafana container
+      ansible.builtin.file:
+        path: "{{ grafana_state_dir }}"
+        state: directory
+        owner: "{{ grafana_uid }}"
+        group: "0"
+        recurse: true
+
+    - name: Ensure directory for the compose override exists
+      ansible.builtin.file:
+        path: "{{ compose_deploy_override | dirname }}"
+        state: directory
+        mode: "0755"
+
+    - name: Read the repository's compose file
+      ansible.builtin.slurp:
+        src: "{{ app_dir }}/docker-compose.yml"
+      register: compose_file_raw
+
+    - name: Write deployment compose override (Grafana state, localhost-only ports)
+      ansible.builtin.template:
+        src: docker-compose.deploy.yml.j2
+        dest: "{{ compose_deploy_override }}"
+        mode: "0644"
+      vars:
+        compose_definition: "{{ compose_file_raw.content | b64decode | from_yaml }}"
+      register: compose_override
+
+    # ---------------------------------------------------------------- Compose
+    # Recreating only some containers breaks the stack: a recreated Kafka gets a
+    # new broker id while ZooKeeper still holds the old registration, and the
+    # one-shot job submitters (flink-job, og-prink-job) submit their Flink jobs
+    # again next to the still running old ones. Therefore:
+    #  - images are rebuilt (--build) only when the checkout changed (or on
+    #    request), because `up --build` recreates all built services;
+    #  - before a rebuild or a compose config change the stack is taken down.
+    - name: Decide whether to rebuild and restart the stack
+      ansible.builtin.set_fact:
+        stack_rebuild: "{{ app_checkout.changed or (compose_rebuild | bool) }}"
+        stack_restart: >-
+          {{ compose_clean_restart == 'always' or
+             (compose_clean_restart == 'auto' and app_checkout.before is not none and
+              (app_checkout.changed or compose_override.changed or (compose_rebuild | bool))) }}
+
+    - name: Stop the running stack before switching versions
+      community.docker.docker_compose_v2:
+        project_src: "{{ app_dir }}"
+        files: "{{ compose_files }}"
+        state: absent
+        remove_orphans: true
+      when: stack_restart | bool
+
+    - name: Build and start the stack (docker compose up -d [--build])
+      community.docker.docker_compose_v2:
+        project_src: "{{ app_dir }}"
+        files: "{{ compose_files }}"
+        state: present
+        # "policy" still builds images that do not exist yet.
+        build: "{{ 'always' if stack_rebuild | bool else 'policy' }}"
+        pull: missing
+        remove_orphans: true
+      register: compose_up
+
+    # ------------------------------------------------------------- Verify
+    - name: Wait for {{ flink_expected_running_jobs }} running Flink jobs
+      ansible.builtin.uri:
+        url: http://localhost:8081/jobs/overview
+        return_content: true
+      register: flink_jobs
+      until: >-
+        flink_jobs.status == 200 and
+        (flink_jobs.json.jobs | selectattr('state', 'equalto', 'RUNNING') | list | length)
+        == (flink_expected_running_jobs | int)
+      retries: "{{ flink_wait_retries }}"
+      delay: "{{ flink_wait_delay }}"
+      when: (flink_expected_running_jobs | int) > 0
+
+    - name: Show deployed version and Flink jobs
+      ansible.builtin.debug:
+        msg:
+          - "Deployed {{ app_version }} ({{ app_checkout.after }})"
+          - "{{ flink_jobs.json.jobs | default([]) | map(attribute='name') | list }}"

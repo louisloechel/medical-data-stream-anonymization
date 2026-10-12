@@ -9,6 +9,7 @@ import prink.datatypes.Cluster;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Stream;
 
 public class ReductionGeneralizer implements BaseGeneralizer{
@@ -79,12 +80,12 @@ public class ReductionGeneralizer implements BaseGeneralizer{
         String[] ids = new String[arraySize];
 
         for (int i = 0; i < entries.size(); i++) {
-            ids[i] = entries.get(i).getField(position).toString();
+            ids[i] = Objects.toString(entries.get(i).getField(position), "");
         }
 
         if(withTuples != null){
             for (int i = 0; i < withTuples.size(); i++) {
-                ids[i + entries.size()] = withTuples.get(i).getField(position).toString();
+                ids[i + entries.size()] = Objects.toString(withTuples.get(i).getField(position), "");
             }
         }
 

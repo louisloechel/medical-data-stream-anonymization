@@ -1,0 +1,24 @@
+# {{ ansible_managed }}
+# Deployment override for {{ app_dir }}/docker-compose.yml (deploy/ansible/deploy.yml).
+services:
+{% for name, svc in (compose_definition.services | default({})).items() %}
+{% set rebind = (bind_ports_to_localhost | bool) and (svc.ports | default([]) | length > 0) %}
+{% if rebind or name == 'grafana' %}
+  {{ name }}:
+{% if name == 'grafana' %}
+    volumes:
+      - {{ grafana_state_dir }}:/var/lib/grafana
+{% endif %}
+{% if rebind %}
+    ports: !override
+{% for p in svc.ports %}
+{% if p is mapping %}
+      - {{ p | combine({'host_ip': '127.0.0.1'}) | to_json }}
+{% else %}
+{% set parts = (p | string).split(':') %}
+      - "{{ ('127.0.0.1:' ~ p) if parts | length == 2 else (('127.0.0.1::' ~ p) if parts | length == 1 else p) }}"
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endif %}
+{% endfor %}

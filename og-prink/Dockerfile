@@ -1,7 +1,9 @@
+# Pinned build image: the pom targets Java 8 bytecode; Temurin 11 builds it and runs the Flink 1.19 build tooling.
 FROM maven:3.9-eclipse-temurin-11 AS build
 WORKDIR /app
 COPY pom.xml .
 COPY src ./src
+COPY profiles ./profiles
 # Build the application using Maven (tests are not compiled or run in the image build;
 # the Maven repository is cached between builds)
 RUN --mount=type=cache,target=/root/.m2 mvn -B -q clean package -Dmaven.test.skip=true

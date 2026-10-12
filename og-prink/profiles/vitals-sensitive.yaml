@@ -1,0 +1,78 @@
+# Anonymization profile: vitals-sensitive
+#
+# Classic split of the attributes:
+#   - quasi-identifiers (generalized, define the equivalence classes): ward, icd10
+#   - sensitive attributes (generalized and protected by l-diversity): resp, bps, pulse, spo2, temp
+#   - NEWS2 sub-scores are dropped: they are a deterministic function of the vitals and would reveal the
+#     band of each sensitive value
+#   - direct identifiers: the patient number stays (needed as data subject key and by the consumer),
+#     names are dropped, the case number is replaced by a salted hash
+#
+# Fields that are not listed are never read and therefore never reach the output topic.
+
+name: vitals-sensitive
+description: Vitals as sensitive attributes, ward and ICD-10 as quasi-identifiers
+
+privacy:
+  k: 5
+  l: 3
+  delta: 125
+  beta: 50000
+  zeta: 10000
+  mu: 100
+  suppressStrategy: 2
+  showInfoLoss: true
+
+kafka:
+  bootstrapServers: kafka:29092
+  inputTopic: processed-topic
+  outputTopic: prink-vitals-sensitive
+  groupId: prink-vitals-sensitive
+
+dataSubjectKey: userid
+
+fields:
+  - { name: recordid,     type: string, role: identifier-passthrough }
+  - { name: userid,       type: string, role: identifier-passthrough }
+  - { name: username,     type: string, role: drop }
+  - { name: userinitials, type: string, role: drop }
+  - name: caseid
+    type: string
+    role: mask
+    mask:
+      strategy: hash
+      saltEnv: PRINK_MASK_SALT   # set the salt at job submission, never commit it
+      length: 16
+
+  # quasi-identifiers
+  - name: ward
+    type: string
+    role: quasi-identifier
+    generalizer: hierarchy
+    hierarchy:
+      root: "*"                  # no tree: a cluster releases its common ward or "*"
+  - name: icd10
+    type: string
+    role: quasi-identifier
+    generalizer: hierarchy
+    hierarchy:
+      file: hierarchies/icd10_chapter1.yaml
+
+  # sensitive attributes (physiological domains)
+  - { name: resp,  type: int,    role: sensitive, generalizer: aggregation, bounds: [0, 60] }
+  - { name: bps,   type: int,    role: sensitive, generalizer: aggregation, bounds: [40, 250] }
+  - { name: pulse, type: int,    role: sensitive, generalizer: aggregation, bounds: [20, 220] }
+  - { name: spo2,  type: int,    role: sensitive, generalizer: aggregation, bounds: [50, 100] }
+  - { name: temp,  type: double, role: sensitive, generalizer: aggregation, bounds: [30.0, 45.0] }
+
+  # derived values that would leak the sensitive attributes
+  - { name: respNEWS,  type: int, role: drop }
+  - { name: bpsNEWS,   type: int, role: drop }
+  - { name: pulseNEWS, type: int, role: drop }
+  - { name: spo2NEWS,  type: int, role: drop }
+  - { name: tempNEWS,  type: int, role: drop }
+  - { name: news2Partial,    role: drop }
+  - { name: news2Components, role: drop }
+
+  - { name: timestamp,   type: string, role: identifier-passthrough }   # producer send time, used for latency
+  - { name: measured_at, type: string, role: identifier-passthrough }

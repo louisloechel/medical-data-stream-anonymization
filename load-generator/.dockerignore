@@ -1,3 +1,11 @@
+# Never bake real data (or data derived from it) into the image.
+# Mount it at runtime instead, e.g. -v ./load-generator/output_dwc:/app/output_dwc:ro
+input/
+output_dwc/
+*.csv
+*.csv.zip
+.env
+# Unused data sets / caches
 archived_output_json_files/
 output_json_files_100/
 __pycache__/
