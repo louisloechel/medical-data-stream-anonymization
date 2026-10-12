@@ -2,8 +2,10 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Only the synthetic data set in output_json_files/ is used (see .dockerignore).
 COPY . .
-RUN pip install kafka-python
-#--no-cache-dir -r requirements.txt
 
 CMD ["python", "-u", "producer.py"]
