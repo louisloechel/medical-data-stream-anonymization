@@ -3,9 +3,10 @@
 services:
 {% for name, svc in (compose_definition.services | default({})).items() %}
 {% set rebind = (bind_ports_to_localhost | bool) and (svc.ports | default([]) | length > 0) %}
-{% if rebind or name == 'grafana' %}
+{% set legacy_grafana = (name == 'grafana') and (grafana_legacy | bool) %}
+{% if rebind or legacy_grafana %}
   {{ name }}:
-{% if name == 'grafana' %}
+{% if legacy_grafana %}
     volumes:
       - {{ grafana_state_dir }}:/var/lib/grafana
 {% endif %}

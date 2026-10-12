@@ -152,10 +152,22 @@
       register: app_checkout
 
     # ---------------------------------------------------------------- Grafana
-    # docker-compose.yml bind-mounts ./grafana (incl. the tracked grafana.db) as
-    # Grafana's data dir. On Linux that fails (the container runs as uid 472)
-    # and would dirty the checkout, so a seeded copy outside the repo is used.
+    # Older versions of docker-compose.yml bind-mount ./grafana (incl. the tracked
+    # grafana.db) as Grafana's data dir. On Linux that fails (the container runs
+    # as uid 472) and would dirty the checkout, so a seeded copy outside the repo
+    # is used. Newer versions provision dashboards from grafana/provisioning and
+    # keep state in a named volume; then nothing needs to be done here.
+    - name: Check whether Grafana is provisioned (named volume, no bind mount)
+      ansible.builtin.stat:
+        path: "{{ app_dir }}/grafana/provisioning"
+      register: grafana_provisioning
+
+    - name: Decide Grafana handling
+      ansible.builtin.set_fact:
+        grafana_legacy: "{{ not grafana_provisioning.stat.exists }}"
+
     - name: Check for existing Grafana state
+      when: grafana_legacy | bool
       ansible.builtin.stat:
         path: "{{ grafana_state_dir }}/grafana.db"
       register: grafana_state
@@ -166,9 +178,10 @@
         dest: "{{ grafana_state_dir }}/"
         remote_src: true
         mode: preserve
-      when: not grafana_state.stat.exists or (grafana_reset | bool)
+      when: (grafana_legacy | bool) and (not grafana_state.stat.exists or (grafana_reset | bool))
 
     - name: Make Grafana state writable for the Grafana container
+      when: grafana_legacy | bool
       ansible.builtin.file:
         path: "{{ grafana_state_dir }}"
         state: directory
