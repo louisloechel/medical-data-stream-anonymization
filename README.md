@@ -134,6 +134,29 @@ settable in `docker-compose.yml` / `.env`):
 In `fixed-rate` mode every patient cycles through its own file independently,
 so patient files may have different lengths.
 
+#### Synthetic data
+`load-generator/generateData.py` creates the synthetic patient files (random values only):
+
+```bash
+cd load-generator
+python3 generateData.py                    # schema v1 -> output_json_files/ (20 patients x 10000 records)
+python3 generateData.py --schema v2 --num-users 10 --num-timestamps 600 \
+    --interval-minutes 1 --seed 2          # ICU schema v2 -> output_json_files_v2/
+```
+
+`load-generator/output_json_files_v2/` contains such a v2 set (10 patients, 600 records each) with all
+optional ICU fields (demographics, rhythm, ventilation, ACVPU, ...), so the full schema can be smoke-tested
+without real data:
+
+```bash
+INPUT_DIR=output_json_files_v2 PRINK_JOB_ARGS="--profile icu-qi-v2 --outputTopic prink-topic" make up
+make smoke-test
+```
+
+`--outputTopic prink-topic` routes the profile's output to the topic the consumer and the smoke test read
+(the profile itself writes to `prink-icu-qi-v2`). Set `PRINK_MASK_SALT` for the Prink job to salt the
+hashed `userid`/`caseid` (see `og-prink/README.md`).
+
 ## Third-Party Licenses
 This project uses third-party components:
 - Apache Kafka, Zookeeper, Flink, Prometheus (Apache 2.0)
