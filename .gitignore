@@ -24,3 +24,5 @@ private/
 # Deployment: private inventories never go into git
 deploy/ansible/inventory/*.ini
 !deploy/ansible/inventory/hosts.example.ini
+# Build output
+target/
