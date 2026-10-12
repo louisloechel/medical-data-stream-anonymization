@@ -8,6 +8,121 @@ It implements the [CASTLE library](https://ieeexplore.ieee.org/document/5374415)
 - Install Apache Flink following the official installation [instructions](https://nightlies.apache.org/flink/flink-docs-release-1.15//docs/try-flink/local_installation/).
 - Clone repository
 
+## Configurable anonymization profiles (Ganges job)
+
+The job `ganges.GangesEvaluation` (main class of the jar) reads JSON records from Kafka (`processed-topic`),
+anonymizes them with Prink and writes JSON to Kafka (`prink-topic`). *What* is anonymized and *how* is defined by
+an **anonymization profile** (YAML or JSON), so no recompilation is needed to change the setup.
+
+### Selecting a profile
+
+| Option (first match wins)            | Meaning                                                              |
+|--------------------------------------|----------------------------------------------------------------------|
+| `--config /path/to/profile.yaml`     | profile file on the machine/container that submits the job (`flink run`) |
+| `--profile <name>`                   | profile bundled in the jar (`profiles/<name>.yaml`, see below)       |
+| env `PRINK_CONFIG=/path/profile.yaml`| like `--config`                                                      |
+| env `PRINK_PROFILE=<name>`           | like `--profile`                                                     |
+| *(nothing)*                          | bundled `thesis-default` (the original thesis setup)                 |
+
+The profile is read when the job is submitted; hierarchy files are inlined at that point, so task managers need
+no access to the profile or its files.
+
+Command line arguments override the profile: `--k --l --delta --beta --zeta --mu --suppressStrategy --showInfoLoss
+--bootstrapServers --inputTopic --outputTopic --groupId`, e.g.
+
+    flink run -m flink-jobmanager:8081 prink-0.6.jar --profile vitals-sensitive --k 10 --delta 250
+
+### Bundled profiles (`og-prink/profiles/`)
+
+| Profile               | Output topic             | Idea                                                                                     |
+|-----------------------|--------------------------|------------------------------------------------------------------------------------------|
+| `thesis-default`      | `prink-topic`            | original setup: all vitals, NEWS2 sub-scores and ICD-10 generalized + sensitive; k=5, l=3, delta=125; keyed on `userid`, temperature as double |
+| `vitals-sensitive`    | `prink-vitals-sensitive` | ward + ICD-10 quasi-identifiers; resp/bps/pulse/spo2/temp sensitive; NEWS2 sub-scores, names dropped; caseid hashed |
+| `news2-only`          | `prink-news2-only`       | raw vitals dropped; only generalized NEWS2 sub-scores + partial NEWS2 total released (sensitive), l=2 |
+| `qi-demographics`     | `prink-qi-demographics`  | placeholder: age band, sex, ward, ICD-10 as quasi-identifiers once the data contains them |
+
+### Profile format
+
+```yaml
+name: vitals-sensitive            # used in the Flink job / operator name
+privacy:                          # CastleFunction parameters (defaults shown)
+  k: 5                            # k-anonymity over distinct data subjects
+  l: 3                            # l-diversity over the sensitive fields (0 = off)
+  delta: 125                      # tuples held back before the oldest one must be released
+  beta: 50000                     # max. non-k-anonymous clusters
+  zeta: 10000                     # max. k-anonymous clusters kept for re-use
+  mu: 100                         # info-loss values averaged for tau
+  suppressStrategy: 2             # 0 = drop, 1 = null generalized fields, 2 = max. generalization
+  showInfoLoss: true              # append field "infoloss"
+kafka:                            # defaults shown
+  bootstrapServers: kafka:29092
+  inputTopic: processed-topic
+  outputTopic: prink-topic
+  groupId: flink-group            # use one group id per job
+dataSubjectKey: userid            # Prink counts k over distinct values of this field (= keyBy + posTupleId)
+fields:                           # tuple order; fields that are not listed are never read nor written
+  - { name: userid,   type: string, role: identifier-passthrough }
+  - { name: username, role: drop }
+  - name: caseid
+    role: mask
+    mask: { strategy: hash, saltEnv: PRINK_MASK_SALT, length: 16 }
+  - name: icd10
+    type: string
+    role: quasi-identifier
+    generalizer: hierarchy
+    hierarchy: { file: hierarchies/icd10_chapter1.yaml }
+  - { name: temp, type: double, role: sensitive, generalizer: aggregation, bounds: [30.0, 45.0] }
+```
+
+Field attributes:
+
+| Attribute     | Values / meaning |
+|---------------|------------------|
+| `name`        | JSON key (input and output) |
+| `type`        | `int`, `long`, `float`, `double`, `string` (default). Numbers given as text are parsed; missing, JSON `null` and unparsable values become `null` |
+| `role`        | `identifier-passthrough`: released unchanged (NoneGeneralizer) · `drop`: removed before anonymization, never written · `mask`: replaced before anonymization by a salted SHA-256 hash (`strategy: hash`, salt via `salt` or – preferred – the env variable named in `saltEnv`, optional `length`) or a constant (`strategy: constant`, `value`) · `quasi-identifier`: generalized, not used for l-diversity · `sensitive`: generalized (if a generalizer is set) and used for l-diversity |
+| `generalizer` | `aggregation` (range `(min,max)`, needs `bounds: [min, max]`, numeric types) · `reduction` (trailing characters replaced by `*`) · `hierarchy` (lowest common ancestor in a tree, string type) · `none` |
+| `hierarchy`   | `file:` YAML/JSON (`paths:` list) or CSV (one path per line, `;` or `,` separated); looked up as given, relative to the profile, then on the classpath · `paths:` inline list of paths from general to specific · `root:` name of the root (default `<ROOT>`). Without paths the hierarchy is flat (common value or root). |
+| `weight`      | optional information-loss weight (CastleRule `infoLossMultiplier`; used if all weights sum to 1) |
+
+Rules enforced when the profile is loaded: a quasi-identifier needs a generalizer; `l > 0` needs at least one
+sensitive field; the data subject key must be `identifier-passthrough`, `mask` (hash) or `drop` (a dropped key is
+used by Prink internally but not written); at most 24 non-dropped fields (Flink tuples have at most 25 fields,
+one is used for `infoloss`); unknown keys are rejected.
+
+Output records contain the configured, non-dropped fields plus `infoloss`. As before, values are written as
+strings (generalized ranges look like `"(36.5,37.3)"`); missing values are written as JSON `null`.
+
+Missing values: a missing/null quasi-identifier or sensitive value does not break the anonymization. Aggregation
+ranges ignore it, a cluster with only missing values releases `null`, hierarchies treat it as a separate value
+below the root, and for l-diversity "missing" counts as one distinct value.
+
+### Running several profiles in parallel
+
+Every profile is an independent Flink job; run one `flink run` per profile with its own output topic and group
+id, e.g. as additional docker-compose services built from `og-prink/`:
+
+```yaml
+  og-prink-vitals:
+    build: { context: ./og-prink }
+    command: ["--profile", "vitals-sensitive"]      # appended to the image's `flink run ... prink-0.6.jar`
+    environment:
+      - PRINK_MASK_SALT=${PRINK_MASK_SALT}          # salt for masked fields, from the host environment
+    depends_on: [flink-jobmanager, flink-taskmanager]
+    networks: [kafka-network]
+
+  og-prink-custom:
+    build: { context: ./og-prink }
+    command: ["--config", "/profiles/my-profile.yaml"]
+    volumes: ["./og-prink/profiles:/profiles:ro"]
+    depends_on: [flink-jobmanager, flink-taskmanager]
+    networks: [kafka-network]
+```
+
+Each job needs one task slot (parallelism 1): raise `taskmanager.numberOfTaskSlots` in `flink-conf.yaml`
+(currently 2: `flink-job` + one Prink job) or add task managers. Kafka creates the output topics automatically
+(`auto.create.topics.enable`); consumers have to subscribe to the new topics (e.g. `prink-vitals-sensitive`).
+
 ## Usage
 To use Prink add the `CastleFunction` as a process into your data stream using `.process()`:
 
