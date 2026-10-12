@@ -4,6 +4,7 @@ FROM maven:3.9-eclipse-temurin-11 AS build
 WORKDIR /app
 COPY pom.xml .
 COPY src ./src
+COPY profiles ./profiles
 # Build the application using Maven
 RUN mvn clean package -DskipTests
 
