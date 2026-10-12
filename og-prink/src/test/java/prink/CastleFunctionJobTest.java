@@ -20,6 +20,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.test.util.MiniClusterWithClientResource;
 import org.junit.ClassRule;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -249,6 +250,7 @@ class CastleFunctionJobTest {
         return arguments.stream();
     }
 
+    @Disabled("Evaluation run that needs the Adult data set at a local path; not part of the regular test suite")
     @ParameterizedTest
     @MethodSource("provideAgeEvalParameters")
     public void prinkAgeDataSetEvaluation(int k, int l, int delta, int beta, int zeta, int mu, ArrayList<CastleRule> rules, String desc) throws Exception {
