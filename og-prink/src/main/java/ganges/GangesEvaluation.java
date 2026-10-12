@@ -147,7 +147,7 @@ public class GangesEvaluation {
         BPSNEWS(new AggregationIntegerGeneralizer(Tuple2.of(0, 3)), true),
         PULSE(new AggregationIntegerGeneralizer(Tuple2.of(0, 3)), true),
         PULSENEWS(new AggregationIntegerGeneralizer(Tuple2.of(0, 3)), true),
-        TEMP(new AggregationIntegerGeneralizer(Tuple2.of(0, 3)), true),
+        TEMP(new AggregationDoubleGeneralizer(Tuple2.of(30d, 45d)), true), // body temperature in °C, keeps decimals
         TEMPNEWS(new AggregationIntegerGeneralizer(Tuple2.of(0, 3)), true),
 //        WAVEFORM(new NonNumericalGeneralizer(new String[][]{
 //            {"Other", "Pleth"},
@@ -295,6 +295,9 @@ public class GangesEvaluation {
             if (this.generalizer instanceof AggregationFloatGeneralizer) {
                 return Float.parseFloat(input);
             }
+            if (this.generalizer instanceof AggregationDoubleGeneralizer) {
+                return Double.parseDouble(input);
+            }
             if (this.generalizer instanceof AggregationIntegerGeneralizer) {
                 return Integer.parseInt(input);
             }
@@ -366,7 +369,7 @@ public class GangesEvaluation {
                 newTuple.setField(jsonNode.get("bpsNEWS").asInt(), 6);
                 newTuple.setField(jsonNode.get("pulse").asInt(), 7);
                 newTuple.setField(jsonNode.get("pulseNEWS").asInt(), 8);
-                newTuple.setField(jsonNode.get("temp").asInt(), 9);
+                newTuple.setField(jsonNode.get("temp").asDouble(), 9);
                 newTuple.setField(jsonNode.get("tempNEWS").asInt(), 10);
                 newTuple.setField(jsonNode.get("icd10").asText(), 11);
                 newTuple.setField(jsonNode.get("timestamp").asText(), 12);
