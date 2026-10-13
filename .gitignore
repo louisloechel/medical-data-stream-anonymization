@@ -27,5 +27,7 @@ deploy/ansible/inventory/*.ini
 !deploy/ansible/inventory/hosts.example.ini
 # Build output
 target/
+.pytest_cache/
+docker-compose.override.yml
 # Generated synthetic data set (schema v2): built into the load-generator image, locally via `make synthetic-v2`
 load-generator/output_json_files_v2/
