@@ -99,7 +99,7 @@ make down          # = docker compose -p streamanon down  (make clean also remov
 - The Flink configuration file is located at `flink-conf.yaml` (mounted read-only and used as `conf/config.yaml` by the Flink 1.19 containers; memory sizes are set via environment variables, see `.env.example`).
 - Key configurations include:
   - `jobmanager.rpc.address`: Address of the job manager.
-  - `taskmanager.numberOfTaskSlots`: Number of task slots per task manager.
+  - `taskmanager.numberOfTaskSlots`: Number of task slots per task manager (overridden by `TASKMANAGER_SLOTS`, default 4).
 
 #### Real monitor data (local only)
 Real data must never be committed. Place exports in `load-generator/input/`
@@ -170,6 +170,73 @@ make smoke-test
 `--outputTopic prink-topic` routes the profile's output to the topic the consumer and the smoke test read
 (the profile itself writes to `prink-icu-qi-v2`). Set `PRINK_MASK_SALT` for the Prink job to salt the
 hashed `userid`/`caseid` (see `og-prink/README.md`).
+
+### Scaling to an ICU workload
+
+Target: ~240 patients for 24 h at ~1 Hz per patient (~10 values per record, ~9 GB of JSON) on one VM with
+16 vCPU, 32 GB RAM and ~50 GB free disk. The settings live in `.env` (see the "Scaling profile" in
+`.env.example`).
+
+**Input.** Convert/generate one file per patient as `*.jsonl.gz` (smallest, streamed), grouped in one
+folder per unit, and mount the folder read-only into the producer with a `docker-compose.override.yml`
+next to `docker-compose.yml` (picked up automatically by `docker compose`, ignored by git):
+
+```yaml
+services:
+  load-generator:
+    volumes:
+      - /data/icu-replay:/data:ro      # /data/icu-replay/<unit>/<patient>.jsonl.gz
+    environment:
+      INPUT_DIR: /data
+      RESCAN_SECONDS: "60"             # units copied in later are picked up without a restart
+```
+
+Copy new files under a temporary name (e.g. `*.part`) and rename them when complete, so the rescan never
+sees a half-written file. Convert a legacy JSON array with
+`python3 -c 'import json,sys; [print(json.dumps(r)) for r in json.load(open(sys.argv[1]))]' p.json | gzip > p.jsonl.gz`.
+
+**Kafka disk.** Each partition is trimmed when it is older than `KAFKA_LOG_RETENTION_HOURS` (default 6) *or*
+larger than `KAFKA_LOG_RETENTION_BYTES` (default 3 GiB per partition), whichever comes first. Kafka deletes
+whole segments (`KAFKA_LOG_SEGMENT_BYTES`, default 256 MiB), so the worst-case disk use of the pipeline is
+
+```
+3 topics x TOPIC_PARTITIONS x (KAFKA_LOG_RETENTION_BYTES + KAFKA_LOG_SEGMENT_BYTES)
+```
+
+(plus profile-specific output topics such as `prink-icu-qi-v2`, which count like a fourth topic). With the
+defaults (1 partition) that is ~9.8 GB; with 4 partitions and 1 GiB per partition ~15 GB. Keep it below
+about half of the free disk (images, container logs and Prometheus need space as well). For orientation:
+240 patients x 86 400 s = ~21 M records per topic and day; the producer and both Flink jobs write lz4
+compressed batches, so a day of all three topics takes roughly 8-12 GB on disk (measured: ~140-180 bytes per
+record and topic with synthetic ICU v2 records). Kafka keeps its data in the container;
+`docker compose down` (or `make clean`) frees it.
+
+**Parallelism.** Both Flink jobs default to parallelism 1. `FLINK_JOB_PARALLELISM` (NEWS2 job) only helps
+with at least as many `raw-topic` partitions (`TOPIC_PARTITIONS`, created by `kafka-init`; existing topics
+are increased, never decreased); messages are keyed by patient, so per-patient order is kept.
+`PRINK_PARALLELISM` partitions the Prink job by patient: every released equivalence class still has >= k
+distinct patients, but each subtask clusters only its share of the patients, which increases information
+loss and, at the same `delta`, the delay (see `og-prink/README.md` "Parallelism"). The TaskManager needs
+`TASKMANAGER_SLOTS >= FLINK_JOB_PARALLELISM + PRINK_PARALLELISM`; both jobs can also take `--parallelism <n>`
+as program argument (`PRINK_JOB_ARGS`). The Prink job is the bottleneck: in a laptop test (Docker Desktop,
+TaskManager limited to 4 CPUs, synthetic data, `icu-qi-v2` with k=5, l=2, delta=125) two Prink subtasks kept
+up with 240 patients at 1 Hz (240 records/s, Prink stage p50 ~1.1 s, p99 ~2.1 s; NEWS2 stage p50 ~25 ms) but
+anonymized only ~500 records/s when offered 2 500 records/s, i.e. `SPEEDUP=10` for 240 patients needs
+considerably more Prink parallelism (at the cost of utility) or a smaller workload. Measure with the latency
+script below and raise the parallelism only if Prink falls behind.
+
+**Latency per stage.** The producer sets the Kafka CreateTime of each raw record to its `timestamp` field;
+flink-job and the Prink job set the CreateTime of their output records to the time they write them (the
+`timestamp` field is passed through). `scripts/latency_from_topics.py` reads a time window of all three
+topics and prints only aggregates (count, throughput, mean/p50/p95/p99/max latency end-to-end and per stage),
+never record contents, so it can be used on real data as well:
+
+```bash
+docker compose run --rm --no-deps -v "$PWD/scripts:/scripts:ro" kafka-consumer \
+    python /scripts/latency_from_topics.py --bootstrap kafka:29092 --since-seconds 300
+# with a profile that writes to its own topic: --prink-topic prink-icu-qi-v2
+# if Prink is far behind, match records further back: --lookback-seconds 900
+```
 
 ### Record schema
 

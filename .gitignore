@@ -28,3 +28,4 @@ deploy/ansible/inventory/*.ini
 # Build output
 target/
 .pytest_cache/
+docker-compose.override.yml
