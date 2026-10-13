@@ -8,5 +8,7 @@ output_dwc/
 # Unused data sets / caches
 archived_output_json_files/
 output_json_files_100/
+# Generated at build time (see Dockerfile); a local copy must not override it
+output_json_files_v2/
 __pycache__/
 *.pyc

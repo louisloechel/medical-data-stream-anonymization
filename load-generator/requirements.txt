@@ -1,3 +1,5 @@
 kafka-python==2.0.2
 # lz4 compression of produced batches (the producer falls back to gzip if it is missing)
 lz4==4.3.3
+# generateData.py (synthetic data); pinned so that --seed always yields the same data set
+faker==37.12.0
