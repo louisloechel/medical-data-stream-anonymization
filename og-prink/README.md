@@ -4,13 +4,19 @@
 Prink is a data anonymization solution for Apache Flink, that provides k-anonymity and l-diversity for data streams. 
 It implements the [CASTLE library](https://ieeexplore.ieee.org/document/5374415) providing strong anonymization guarantees for numerical and non-numerical data, as well as support for multiple sensitive attributes and custom generalizers.
 
+This folder contains the Prink library (packages `prink`, `prink.datatypes`, `prink.generalizations`) as published by its
+authors, plus the job and profile code of this project in `streamanon.anonymization` (previously the package
+`ganges`). The upstream demo and evaluation code (the `examples` taxi demo, `PrinkEvaluation`,
+`CompareProcessingFunction`) is not needed by the pipeline and was removed; see the original Prink repository
+(TODO: link) for it.
+
 ## Getting started
 - Install Apache Flink following the official installation [instructions](https://nightlies.apache.org/flink/flink-docs-release-1.15//docs/try-flink/local_installation/).
 - Clone repository
 
-## Configurable anonymization profiles (Ganges job)
+## Configurable anonymization profiles (anonymization job)
 
-The job `ganges.GangesEvaluation` (main class of the jar) reads JSON records from Kafka (`processed-topic`),
+The job `streamanon.anonymization.AnonymizationJob` (main class of the jar) reads JSON records from Kafka (`processed-topic`),
 anonymizes them with Prink and writes JSON to Kafka (`prink-topic`). *What* is anonymized and *how* is defined by
 an **anonymization profile** (YAML or JSON), so no recompilation is needed to change the setup.
 

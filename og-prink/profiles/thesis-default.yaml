@@ -1,6 +1,6 @@
 # Anonymization profile: thesis-default
 #
-# Reproduces the original hard-coded setup of GangesEvaluation (used when no profile is given),
+# Reproduces the original hard-coded setup of the former GangesEvaluation job (now streamanon.anonymization.AnonymizationJob) (used when no profile is given),
 # with two fixes applied:
 #   - the data subject key is the patient number (userid), so k counts distinct patients
 #   - temp is a double (37.3 stays 37.3) and is aggregated as a double

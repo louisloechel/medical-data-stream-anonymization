@@ -1,6 +1,6 @@
 # ICD-10 domain generalization hierarchy (excerpt of chapter I: A00-A28),
 # used by the NonNumericalGeneralizer (generalizer: hierarchy).
-# Moved verbatim from the former hard-coded DatasetFields.ICD10 definition in GangesEvaluation.
+# Moved verbatim from the former hard-coded DatasetFields.ICD10 definition in the former GangesEvaluation job (now AnonymizationJob).
 # Each path lists the nodes from the most general to the most specific value.
 # Codes that are not part of the hierarchy are attached directly below the root.
 name: icd10_chapter1
