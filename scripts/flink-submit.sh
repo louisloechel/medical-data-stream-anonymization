@@ -19,6 +19,8 @@
 #   FLINK_JM         JobManager REST endpoint (default flink-jobmanager:8081)
 #   WAIT_TIMEOUT     seconds to wait for the cluster (default 300)
 #   WATCH_INTERVAL   seconds between checks in watch mode (default 30, 0 = off)
+#   MIN_FREE_SLOTS   free task slots required before submitting (default 1;
+#                    set to the job's parallelism)
 set -euo pipefail
 
 : "${JAR:?JAR must be set}"
@@ -26,17 +28,18 @@ set -euo pipefail
 FLINK_JM="${FLINK_JM:-flink-jobmanager:8081}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-300}"
 WATCH_INTERVAL="${WATCH_INTERVAL:-30}"
+MIN_FREE_SLOTS="${MIN_FREE_SLOTS:-1}"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [submit] $*"; }
 
 wait_for_cluster() {
   local deadline overview slots
-  log "waiting for JobManager at ${FLINK_JM} with a free task slot (timeout ${WAIT_TIMEOUT}s)"
+  log "waiting for JobManager at ${FLINK_JM} with ${MIN_FREE_SLOTS} free task slot(s) (timeout ${WAIT_TIMEOUT}s)"
   deadline=$(( $(date +%s) + WAIT_TIMEOUT ))
   while true; do
     overview="$(curl -fsS "http://${FLINK_JM}/overview" 2>/dev/null || true)"
     slots="$(echo "${overview}" | sed -n 's/.*"slots-available":\([0-9]*\).*/\1/p')"
-    if [ -n "${slots}" ] && [ "${slots}" -gt 0 ]; then
+    if [ -n "${slots}" ] && [ "${slots}" -ge "${MIN_FREE_SLOTS}" ] && [ "${slots}" -gt 0 ]; then
       log "cluster ready (${slots} free slots)"
       return 0
     fi

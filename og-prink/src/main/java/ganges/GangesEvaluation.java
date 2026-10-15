@@ -12,7 +12,6 @@ import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple;
 import org.apache.flink.api.java.typeutils.GenericTypeInfo;
 import org.apache.flink.api.java.utils.ParameterTool;
-import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.streaming.api.datastream.BroadcastStream;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -25,6 +24,7 @@ import prink.datatypes.CastleRule;
 
 import java.util.List;
 import java.util.Properties;
+import java.util.function.Function;
 
 /**
  * Flink job that anonymizes the {@code processed-topic} stream with Prink (CASTLE, k-anonymity + l-diversity)
@@ -35,6 +35,12 @@ import java.util.Properties;
  * {@code PRINK_PROFILE}. Without any of these the bundled {@code thesis-default} profile is used, which
  * reproduces the original hard-coded setup. Privacy and Kafka settings can be overridden on the command line,
  * see {@link ProfileLoader}.</p>
+ *
+ * <p>Parallelism: {@code --parallelism <n>} or the environment variable {@value #ENV_PARALLELISM} (default 1).
+ * The stream is keyed by the data subject, so every patient is handled by exactly one subtask and each subtask
+ * runs its own CASTLE instance (clusters, delta buffer, beta/zeta limits) on its share of the patients. Every
+ * released cluster still contains at least k distinct patients, but each subtask only sees about 1/n of the
+ * population and n * delta records are held back in total; see og-prink/README.md "Parallelism".</p>
  */
 public class GangesEvaluation {
 
@@ -48,17 +54,38 @@ public class GangesEvaluation {
                     TypeInformation.of(new TypeHint<CastleRule>() {
                     }));
 
+    static final String ENV_PARALLELISM = "PRINK_PARALLELISM";
+
     public static void main(String[] args) throws Exception {
         ParameterTool params = ParameterTool.fromArgs(args);
         AnonymizationProfile profile = ProfileLoader.load(params);
-        JobExecutionResult r = new GangesEvaluation().execute(profile);
+        JobExecutionResult r = new GangesEvaluation().execute(profile, resolveParallelism(params, System::getenv));
         System.out.println(r.toString());
     }
 
+    /** Job parallelism from {@code --parallelism} or {@value #ENV_PARALLELISM}; default 1. */
+    static int resolveParallelism(ParameterTool params, Function<String, String> env) {
+        String value = params.get("parallelism", null);
+        if (value == null || value.trim().isEmpty()) value = env.apply(ENV_PARALLELISM);
+        if (value == null || value.trim().isEmpty()) return 1;
+        int parallelism;
+        try {
+            parallelism = Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("parallelism must be a positive integer: " + value);
+        }
+        if (parallelism < 1) throw new IllegalArgumentException("parallelism must be >= 1: " + value);
+        return parallelism;
+    }
+
     public JobExecutionResult execute(AnonymizationProfile profile) throws Exception {
+        return execute(profile, 1);
+    }
+
+    public JobExecutionResult execute(AnonymizationProfile profile, int parallelism) throws Exception {
         // Set up streaming execution environment
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.setParallelism(1);
+        env.setParallelism(parallelism);
 
         // Set up Kafka consumer properties
         Properties properties = new Properties();
@@ -73,16 +100,19 @@ public class GangesEvaluation {
 
         DataStream<Tuple> anonymized = anonymize(env, input, profile);
 
+        // Keyed by the released (masked) data subject key, Kafka timestamp = write time (see ProfileKafkaRecordSerializer)
+        Properties producerConfig = new Properties();
+        producerConfig.setProperty("linger.ms", "5");
+        producerConfig.setProperty("compression.type", "lz4");
         KafkaSink<Tuple> sink = KafkaSink.<Tuple>builder()
                 .setBootstrapServers(profile.kafka.bootstrapServers)
-                .setRecordSerializer(KafkaRecordSerializationSchema.builder()
-                        .setTopic(profile.kafka.outputTopic)
-                        .setValueSerializationSchema(new ProfileTupleToJson(profile))
-                        .build())
+                .setKafkaProducerConfig(producerConfig)
+                .setRecordSerializer(new ProfileKafkaRecordSerializer(profile))
                 .build();
         anonymized.sinkTo(sink).name("kafka:" + profile.kafka.outputTopic);
 
-        LOG.info("Starting Prink job {}: {} -> {}", profile.evalDescription(), profile.kafka.inputTopic, profile.kafka.outputTopic);
+        LOG.info("Starting Prink job {} (parallelism {}): {} -> {}", profile.evalDescription(), parallelism,
+                profile.kafka.inputTopic, profile.kafka.outputTopic);
         return env.execute(profile.evalDescription());
     }
 
