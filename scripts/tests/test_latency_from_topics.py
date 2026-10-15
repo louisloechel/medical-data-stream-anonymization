@@ -71,6 +71,6 @@ def test_lookback_records_match_but_are_not_counted():
     ts = "2026-01-01T12:00:00.000Z"
     processed.add(rec(1, ts), window_start - 60000)   # lookback: written 60 s before the window
     prink.add(rec(1, ts), window_start + 5000)        # released inside the window
-    assert processed.create_ms == [] and processed.read == 1
+    assert len(processed.create_ms) == 0 and processed.read == 1
     assert lat.stage_latencies(processed, prink) == [65000]
     assert lat.stage_latencies(prink, processed) == []  # only in-window downstream records count

@@ -18,7 +18,11 @@ From this the script derives
 
 Per-stage values need the same record in both topics; records are matched by
 (recordid, timestamp) in memory (the Prink profile must pass both through, as
-the bundled profiles do). The upstream topics are read ``--lookback-seconds``
+the bundled profiles do). To keep memory bounded at high rates (millions of
+records), each (recordid, timestamp) pair is stored as one 64-bit hash and all
+timestamps in compact integer arrays; a hash collision (probability ~n^2/2^65,
+about 1e-7 for 2 M records) is the only way a match could differ from an exact
+comparison. The raw-topic index is released once the flink-job stage is computed. The upstream topics are read ``--lookback-seconds``
 further back than the window, so records that spent longer than the window in
 a stage (e.g. Prink's delta buffer) still find their counterpart; set it above
 the expected stage latency. All timestamps come from the clock of one machine
@@ -37,6 +41,7 @@ Usage (needs confluent-kafka; inside the stack the consumer image has it):
 
 import argparse
 import json
+from array import array
 import math
 import sys
 import time
@@ -84,10 +89,10 @@ class TopicSample:
 
     def __init__(self, window_start_ms=None):
         self.window_start_ms = window_start_ms
-        self.create_ms = []      # Kafka CreateTime per record in the window
-        self.e2e_ms = []         # CreateTime - producer timestamp field
-        self.by_key = {}         # (recordid, timestamp) -> CreateTime, incl. lookback
-        self.window_keys = []    # keys of the records in the window
+        self.create_ms = array("q")    # Kafka CreateTime per record in the window
+        self.e2e_ms = array("q")       # CreateTime - producer timestamp field
+        self.by_key = {}               # hash(recordid, timestamp) -> CreateTime, incl. lookback
+        self.window_keys = array("q")  # key hashes of the records in the window
         self.unparseable = 0
         self.read = 0            # records read, incl. lookback
 
@@ -109,7 +114,8 @@ class TopicSample:
         if sent is None:
             return
         rid = record.get("recordid")
-        key = None if rid is None else (str(rid), record.get("timestamp"))
+        # one 64-bit hash per (recordid, timestamp) instead of a tuple of strings: ~4x less memory
+        key = None if rid is None else hash((str(rid), record.get("timestamp")))
         if key is not None:
             self.by_key.setdefault(key, create_ms)
         if in_window:
@@ -197,7 +203,9 @@ def fmt(value):
     return "-" if value is None else f"{value:.0f}"
 
 
-def report(samples, topics):
+def report(samples, topics, stages=None):
+    """``stages`` may hold precomputed stage latencies ("flink", "prink"), e.g. after upstream indexes were freed."""
+    stages = stages or {}
     lines = ["", "Throughput (records in the window, by Kafka CreateTime)",
              f"  {'topic':<24} {'records':>9} {'msg/s':>9}"]
     for stage in STAGES:
@@ -210,8 +218,10 @@ def report(samples, topics):
         ("producer -> " + topics["raw"], samples["raw"].e2e_ms),
         ("producer -> " + topics["processed"], samples["processed"].e2e_ms),
         ("producer -> " + topics["prink"], samples["prink"].e2e_ms),
-        ("stage flink-job (raw -> processed)", stage_latencies(samples["raw"], samples["processed"])),
-        ("stage Prink (processed -> prink)", stage_latencies(samples["processed"], samples["prink"])),
+        ("stage flink-job (raw -> processed)",
+         stages["flink"] if "flink" in stages else stage_latencies(samples["raw"], samples["processed"])),
+        ("stage Prink (processed -> prink)",
+         stages["prink"] if "prink" in stages else stage_latencies(samples["processed"], samples["prink"])),
     ]
     lines += ["", "Latency in ms",
               f"  {'':<38} {'n':>8} {'mean':>8} {'p50':>8} {'p95':>8} {'p99':>8} {'max':>8}"]
@@ -243,17 +253,22 @@ def main(argv=None):
     topics = {"raw": args.raw_topic, "processed": args.processed_topic, "prink": args.prink_topic}
     since_ms = None if args.from_beginning else int((time.time() - args.since_seconds) * 1000)
     lookback_ms = int(args.lookback_seconds * 1000)
-    samples = {}
+    samples, stages = {}, {}
     for stage in STAGES:
         samples[stage] = read_topic(args.bootstrap, topics[stage], since_ms, args.max_records, args.timeout,
                                     lookback_ms=0 if stage == "prink" else lookback_ms)
+        if stage == "processed":  # raw -> processed is complete: release the raw-topic index
+            stages["flink"] = stage_latencies(samples["raw"], samples["processed"])
+            samples["raw"].by_key.clear()
+        elif stage == "prink":
+            stages["prink"] = stage_latencies(samples["processed"], samples["prink"])
     window_text = "whole topics" if since_ms is None else f"last {args.since_seconds:.0f} s"
     print(f"Window: {window_text} (lookback {args.lookback_seconds:.0f} s for matching), "
           f"at most {args.max_records} records read per topic")
     for stage in STAGES:
         if samples[stage].read >= args.max_records:
             print(f"  note: {topics[stage]} hit --max-records; statistics cover only part of the window")
-    print(report(samples, topics))
+    print(report(samples, topics, stages))
     return 0
 
 
