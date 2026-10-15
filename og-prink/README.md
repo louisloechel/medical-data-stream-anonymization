@@ -133,9 +133,56 @@ id, e.g. as additional docker-compose services built from `og-prink/`:
     networks: [kafka-network]
 ```
 
-Each job needs one task slot (parallelism 1): raise `taskmanager.numberOfTaskSlots` in `flink-conf.yaml`
-(currently 2: `flink-job` + one Prink job) or add task managers. Kafka creates the output topics automatically
-(`auto.create.topics.enable`); consumers have to subscribe to the new topics (e.g. `prink-vitals-sensitive`).
+Each job needs one task slot per unit of parallelism: raise `TASKMANAGER_SLOTS` (docker-compose, default 4;
+`taskmanager.numberOfTaskSlots` in `flink-conf.yaml`) or add task managers. Kafka creates the output topics
+automatically (`auto.create.topics.enable`); consumers have to subscribe to the new topics (e.g.
+`prink-vitals-sensitive`).
+
+### Parallelism
+
+`--parallelism <n>` (or the environment variable `PRINK_PARALLELISM`, set from `.env` in docker-compose;
+default 1) runs the anonymization with `n` parallel subtasks:
+
+```
+processed-topic -> json-to-tuple -> keyBy(dataSubjectKey) -> CastleFunction x n -> prink-topic
+```
+
+What this means for the privacy guarantee:
+
+- `keyBy` on the data subject key (`userid`) routes *all* records of a patient to the same subtask, for the
+  whole run. A patient is never split across subtasks.
+- The CASTLE state (`bigGamma`, `bigOmega`, the `delta` buffer, `tau`) is held per subtask (operator
+  instance), not per key. Each subtask therefore runs an independent CASTLE instance over the patients of its
+  key groups only.
+- k is counted as *distinct data subjects* inside a cluster (`Cluster.size()`), and a cluster is only released
+  (or a ks-cluster from `bigOmega` reused) if it has >= k distinct patients and l-diverse sensitive values, as
+  with parallelism 1. So **every released equivalence class still covers >= k distinct patients** and is
+  l-diverse; the guarantee holds per subtask and thus for the union of the outputs. Suppressed records are
+  generalized to the root (suppress strategy 2), as before.
+- `ParallelismTest` checks this on synthetic data for parallelism 2 and 4 (every released combination of
+  generalized values belongs to >= k distinct patients).
+
+The trade-off is utility and latency, not the guarantee:
+
+- **Smaller population per subtask.** With `P` patients and `n` subtasks each CASTLE instance sees about `P/n`
+  patients (hash partitioning over 128 key groups, so the split is uneven for small `P`). Clusters are formed
+  from fewer, less similar candidates: wider generalized ranges (higher information loss) and more suppressed
+  records. If a subtask holds fewer than `k` patients (or not enough distinct sensitive values for `l`), all
+  its records are suppressed. Rule of thumb: keep `P/n` well above `k` (e.g. >= 10 k).
+- **Higher delay at the same `delta`.** `delta` is the number of records each subtask holds back. A subtask
+  receives about `1/n` of the record rate, so a record waits about `delta * n / rate` seconds instead of
+  `delta / rate`, and `n * delta` records are held in total. Scale `delta` down by `n` to keep the latency, at
+  the cost of fewer candidates per cluster.
+- **beta/zeta/mu apply per subtask** (memory grows with `n`).
+- Cross-subtask linkage: the subtasks do not coordinate, so two subtasks may release classes with identical
+  generalized values. Each of those still covers >= k patients on its own; merging them only enlarges the
+  class.
+
+With ~240 ICU patients at 1 Hz (240 records/s) a single CASTLE instance is usually fast enough; measure
+before raising the parallelism (e.g. with `scripts/latency_from_topics.py`, see the main README) and prefer
+`n = 1` or `2` for the best utility. The parallelism of the stateful job cannot be changed for a running job
+(there is no savepoint/rescale support for the CASTLE operator state); stop the job and resubmit it, which
+starts with empty clusters.
 
 ## Usage
 To use Prink add the `CastleFunction` as a process into your data stream using `.process()`:

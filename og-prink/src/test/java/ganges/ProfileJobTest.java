@@ -65,7 +65,7 @@ class ProfileJobTest {
      * Synthetic records in the processed-topic schema v2 (ICU fields). Demographics are constant per patient;
      * some fields are missing or null. All values are made up.
      */
-    private static List<String> syntheticIcuRecords(int patients, int recordsPerPatient) {
+    static List<String> syntheticIcuRecords(int patients, int recordsPerPatient) {
         List<String> records = new ArrayList<>();
         Random random = new Random(7);
         String[] ageBands = {"40-49", "50-59", "60-69", "70-79", "80-89", "60-69"};
@@ -116,8 +116,13 @@ class ProfileJobTest {
     }
 
     private static List<ObjectNode> run(AnonymizationProfile profile, List<String> input) throws Exception {
+        return run(profile, input, 1);
+    }
+
+    /** Runs the pipeline with the given parallelism of the keyed CastleFunction (the bounded source has parallelism 1) */
+    static List<ObjectNode> run(AnonymizationProfile profile, List<String> input, int parallelism) throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.setParallelism(1);
+        env.setParallelism(parallelism);
         DataStream<Tuple> anonymized = GangesEvaluation.anonymize(env, env.fromCollection(input), profile);
         ProfileTupleToJson toJson = new ProfileTupleToJson(profile);
         List<ObjectNode> output = new ArrayList<>();

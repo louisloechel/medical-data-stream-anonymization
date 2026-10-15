@@ -38,9 +38,17 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_NUM_PARTITIONS: 1
+      # partitions of auto-created topics (e.g. a profile's own output topic)
+      KAFKA_NUM_PARTITIONS: ${TOPIC_PARTITIONS:-1}
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_LOG_RETENTION_HOURS: 6
+      # Disk safety: a partition is trimmed when it exceeds the age OR the size
+      # limit (whichever comes first); old data is deleted in whole segments.
+      # Worst-case disk use ~ topics x partitions x (RETENTION_BYTES + SEGMENT_BYTES),
+      # see README "Scaling to an ICU workload".
+      KAFKA_LOG_RETENTION_HOURS: ${KAFKA_LOG_RETENTION_HOURS:-6}
+      KAFKA_LOG_RETENTION_BYTES: ${KAFKA_LOG_RETENTION_BYTES:-3221225472}  # per partition, 3 GiB
+      KAFKA_LOG_SEGMENT_BYTES: ${KAFKA_LOG_SEGMENT_BYTES:-268435456}      # 256 MiB
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 60000
       KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xms512m -Xmx512m}
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1"]
@@ -64,15 +72,25 @@ services:
       kafka:
         condition: service_healthy
     entrypoint: ["/bin/bash", "-c"]
+    # TOPIC_PARTITIONS > 1 lets the Flink jobs read with parallelism > 1 (messages are
+    # keyed by patient, so per-patient order is kept). Existing topics with fewer
+    # partitions are increased (never decreased).
     command:
       - |
         set -e
+        P="$${TOPIC_PARTITIONS:-1}"
         for t in raw-topic processed-topic prink-topic; do
-          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic "$$t" --partitions 1 --replication-factor 1
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic "$$t" --partitions "$$P" --replication-factor 1
+          cur="$$(/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --describe --topic "$$t" | sed -n 's/.*PartitionCount: *\([0-9]*\).*/\1/p' | head -n 1)"
+          if [ -n "$$cur" ] && [ "$$cur" -lt "$$P" ]; then
+            echo "increasing partitions of $$t from $$cur to $$P"
+            /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --alter --topic "$$t" --partitions "$$P"
+          fi
         done
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --describe --topic 'raw-topic|processed-topic|prink-topic' | grep PartitionCount
     environment:
       KAFKA_HEAP_OPTS: -Xmx128m
+      TOPIC_PARTITIONS: ${TOPIC_PARTITIONS:-1}
     restart: "no"
     networks:
       - kafka-network
@@ -88,9 +106,13 @@ services:
       REPLAY_MODE: ${REPLAY_MODE:-fixed-rate}
       SPEEDUP: ${SPEEDUP:-1}
       LOOP: ${LOOP:-1}
+      RESCAN_SECONDS: ${RESCAN_SECONDS:-0}
+      STATS_SECONDS: ${STATS_SECONDS:-10}
+      TOPIC_PARTITIONS: ${TOPIC_PARTITIONS:-1}
     # Real data is never part of the image (see load-generator/.dockerignore).
-    # To replay locally converted data, mount it read-only and set e.g.
-    # INPUT_DIR=output_dwc REPLAY_MODE=original-timing SPEEDUP=60:
+    # To replay data from the host, mount it read-only, e.g. in a (git-ignored)
+    # docker-compose.override.yml, and set INPUT_DIR (sub-folders are scanned,
+    # *.json, *.jsonl and *.jsonl.gz; see README "Scaling to an ICU workload"):
     # volumes:
     #   - ./load-generator/output_dwc:/app/output_dwc:ro
     depends_on:
@@ -99,7 +121,8 @@ services:
     deploy:
       resources:
         limits:
-          # the producer loads all JSON files of output_json_files/ into memory
+          # JSON Lines files are streamed; legacy *.json arrays are loaded
+          # one file per patient
           memory: ${LOAD_GENERATOR_MEM_LIMIT:-512m}
     restart: unless-stopped
     networks:
@@ -216,8 +239,10 @@ services:
       - "9251:9249"   # Prometheus metrics (TaskManager)
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      # slots >= FLINK_JOB_PARALLELISM + PRINK_PARALLELISM
       FLINK_PROPERTIES: |
         taskmanager.memory.process.size: ${FLINK_TM_PROCESS_SIZE:-2048m}
+        taskmanager.numberOfTaskSlots: ${TASKMANAGER_SLOTS:-4}
     deploy:
       resources:
         limits:
@@ -238,6 +263,9 @@ services:
     environment:
       JAR: /flink-job/flink-job.jar
       JOB_NAME_REGEX: "^Kafka Flink Job$$"
+      # read by the job's main() at submission; use >= this many raw-topic partitions
+      FLINK_JOB_PARALLELISM: ${FLINK_JOB_PARALLELISM:-1}
+      MIN_FREE_SLOTS: ${FLINK_JOB_PARALLELISM:-1}
     volumes:
       - ./scripts/flink-submit.sh:/opt/scripts/flink-submit.sh:ro
     depends_on:
@@ -265,6 +293,10 @@ services:
       # Default job name is "<profile>_k<k>_delta<delta>_l<l>_beta<beta>_zeta<zeta>_mu<mu>"
       JOB_NAME_REGEX: "(^|_)k[0-9]+_delta"
       JOB_ARGS: ${PRINK_JOB_ARGS:-}
+      # keyed by patient: each subtask anonymizes its share of the patients
+      # (see og-prink/README.md "Parallelism")
+      PRINK_PARALLELISM: ${PRINK_PARALLELISM:-1}
+      MIN_FREE_SLOTS: ${PRINK_PARALLELISM:-1}
       # Salt for profile fields with role mask (saltEnv: PRINK_MASK_SALT), taken
       # from the host environment / .env; unset = hash without salt (warning).
       PRINK_MASK_SALT:
