@@ -85,7 +85,7 @@ make down          # = docker compose -p streamanon down  (make clean also remov
 | `zeta`    | 10000         |
 | `mu`      | 100           |
 
-> **Note:** The privacy parameters can be configured in the [GangesEvaluation.java Prink Job](og-prink/src/main/java/ganges/GangesEvaluation.java) file.
+> **Note:** The privacy parameters can be configured in the [AnonymizationJob.java (Prink job)](og-prink/src/main/java/streamanon/anonymization/AnonymizationJob.java) file.
 
 #### Prink Kafka consumer properties
 - `bootstrap.servers`: Kafka broker addresses.
@@ -93,7 +93,7 @@ make down          # = docker compose -p streamanon down  (make clean also remov
 - `key.deserializer`: Deserializer for the message key.
 - `value.deserializer`: Deserializer for the message value.
 
-> **Note:** The consumer properties (connecting Prink to other topics) can be configured in the [GangesEvaluation.java Prink Job](og-prink/src/main/java/ganges/GangesEvaluation.java) file.
+> **Note:** The consumer properties (connecting Prink to other topics) can be configured in the [AnonymizationJob.java (Prink job)](og-prink/src/main/java/streamanon/anonymization/AnonymizationJob.java) file.
 
 #### Flink Configuration
 - The Flink configuration file is located at `flink-conf.yaml` (mounted read-only and used as `conf/config.yaml` by the Flink 1.19 containers; memory sizes are set via environment variables, see `.env.example`).
